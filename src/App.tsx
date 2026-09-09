@@ -1,7 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  MAX_HEARTS,
   catsPlaced,
   createGame,
   hint,
@@ -16,21 +15,13 @@ import {
 } from './core/game';
 import { sfx } from './core/sfx';
 import { Board, type PaintMode } from './ui/Board';
-import {
-  CatFace,
-  HelpIcon,
-  Heart,
-  HintIcon,
-  PawIcon,
-  ResetIcon,
-  SoundIcon,
-  UndoIcon,
-} from './ui/icons';
+import { Cat, CAT_NORMAL_SRC } from './ui/Cat';
+import { HelpIcon, HintIcon, ResetIcon, SettingsIcon, UndoIcon } from './ui/icons';
 
 const RULES = [
-  '各カラー領域に猫は 1 匹',
-  '各行・各列に猫は 1 匹',
-  '猫どうしは斜めも隣接できない',
+  '1 cat in each color region',
+  '1 cat in every row and column',
+  'Cats can’t touch, even diagonally',
 ];
 
 /** ?level=12 のように指定すると、その面から始められる。動作確認用。 */
@@ -118,19 +109,11 @@ export default function App() {
     setState((s) => reset(s));
   }, []);
 
-  const doHint = useCallback(() => {
-    apply(hint(state));
-  }, [apply, state]);
+  const doHint = useCallback(() => apply(hint(state)), [apply, state]);
+  const nextLevel = useCallback(() => setState((s) => createGame(s.level + 1)), []);
+  const retry = useCallback(() => setState((s) => reset(s)), []);
 
-  const nextLevel = useCallback(() => {
-    setState((s) => createGame(s.level + 1));
-  }, []);
-
-  const retry = useCallback(() => {
-    setState((s) => reset(s));
-  }, []);
-
-  const toggleMute = useCallback(() => {
+  const toggleSound = useCallback(() => {
     setMuted((m) => {
       sfx.setMuted(!m);
       if (m) sfx.cross(0);
@@ -145,64 +128,63 @@ export default function App() {
     <div className="app">
       <header className="header">
         <span className="progress">
-          <PawIcon />
-          {placed} / {size}
+          <img className="progress-cat" src={CAT_NORMAL_SRC} alt="" draggable={false} />
+          <span className="progress-count">
+            <span className="progress-now">{placed}</span>
+            <span className="progress-slash">/</span>
+            <span className="progress-total">{size}</span>
+          </span>
         </span>
-        <h1 className="title">レベル {state.level}</h1>
+
+        <h1 className="title">Level {state.level}</h1>
+
         <div className="header-actions">
-          <button className="icon-btn" onClick={toggleMute} data-off={muted} aria-label="音の切り替え">
-            <SoundIcon muted={muted} />
-          </button>
-          <button className="icon-btn" aria-label="遊び方">
+          <button className="icon-btn" type="button" aria-label="How to play">
             <HelpIcon />
+          </button>
+          <button
+            className="icon-btn"
+            type="button"
+            data-off={muted}
+            onClick={toggleSound}
+            aria-label={muted ? 'Sound off' : 'Sound on'}
+          >
+            <SettingsIcon />
           </button>
         </div>
       </header>
 
-      <div className="hearts" aria-label={`残りのミス ${state.hearts}`}>
-        {Array.from({ length: MAX_HEARTS }, (_, i) => (
-          <motion.span
-            key={i}
-            animate={i < state.hearts ? { scale: 1 } : { scale: [1, 1.35, 0.9, 1] }}
-            transition={{ duration: 0.4 }}
-          >
-            <Heart filled={i < state.hearts} />
-          </motion.span>
-        ))}
-      </div>
+      <section className="rules">
+        <div className="rules-grid">
+          {RULES.map((r) => (
+            <p className="rule" key={r}>
+              {r}
+            </p>
+          ))}
+        </div>
+      </section>
 
-      <div className="rules">
-        {RULES.map((r) => (
-          <p className="rule" key={r}>
-            {r}
-          </p>
-        ))}
-      </div>
-
-      <Board
-        state={state}
-        onTap={handleTap}
-        onPaint={handlePaint}
-        onPaintEnd={handlePaintEnd}
-      />
+      <Board state={state} onTap={handleTap} onPaint={handlePaint} onPaintEnd={handlePaintEnd} />
 
       <footer className="footer">
         <button
           className="tool"
+          type="button"
           onClick={doUndo}
           disabled={state.history.length === 0 || state.status !== 'playing'}
-          aria-label="ひとつ戻す"
+          aria-label="Undo"
         >
           <UndoIcon />
         </button>
-        <button className="tool" onClick={doReset} aria-label="やり直す">
+        <button className="tool" type="button" onClick={doReset} aria-label="Reset">
           <ResetIcon />
         </button>
         <button
           className="tool"
+          type="button"
           onClick={doHint}
           disabled={state.status !== 'playing'}
-          aria-label="ヒント"
+          aria-label="Hint"
         >
           <HintIcon />
         </button>
@@ -219,29 +201,41 @@ export default function App() {
           >
             <motion.div
               className="banner-card"
-              initial={{ scale: 0.85, y: 14 }}
+              initial={{ scale: 0.85, y: 16 }}
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0 }}
               transition={{ type: 'spring', stiffness: 420, damping: 26 }}
             >
+              <motion.div
+                className="banner-cat"
+                animate={
+                  state.status === 'won'
+                    ? { y: [0, -10, 0] }
+                    : { rotate: [0, -8, 8, -5, 0] }
+                }
+                transition={
+                  state.status === 'won'
+                    ? { duration: 0.9, repeat: Infinity, repeatDelay: 0.4 }
+                    : { duration: 0.7 }
+                }
+              >
+                <Cat mood={state.status === 'won' ? 'happy' : 'sad'} className="banner-cat-img" />
+              </motion.div>
+
               {state.status === 'won' ? (
                 <>
-                  <ResultCat />
-                  <h2>クリア！</h2>
-                  <p>
-                    レベル {state.level} を {state.hearts} ハート残しで突破
-                  </p>
-                  <button className="banner-btn" onClick={nextLevel}>
-                    次のレベルへ
+                  <h2>Purrfect!</h2>
+                  <p>Level {state.level} cleared</p>
+                  <button className="banner-btn" type="button" onClick={nextLevel}>
+                    Next level
                   </button>
                 </>
               ) : (
                 <>
-                  <ResultCat sad />
-                  <h2>ミスが 3 回</h2>
-                  <p>同じ問題をもう一度</p>
-                  <button className="banner-btn" onClick={retry}>
-                    やり直す
+                  <h2>Out of tries</h2>
+                  <p>Give this one another go</p>
+                  <button className="banner-btn" type="button" onClick={retry}>
+                    Try again
                   </button>
                 </>
               )}
@@ -250,19 +244,5 @@ export default function App() {
         )}
       </AnimatePresence>
     </div>
-  );
-}
-
-function ResultCat({ sad = false }: { sad?: boolean }) {
-  return (
-    <motion.div
-      className="result-cat"
-      animate={sad ? { rotate: [0, -7, 7, -4, 0] } : { y: [0, -9, 0] }}
-      transition={
-        sad ? { duration: 0.6 } : { duration: 0.9, repeat: Infinity, repeatDelay: 0.5 }
-      }
-    >
-      <CatFace />
-    </motion.div>
   );
 }

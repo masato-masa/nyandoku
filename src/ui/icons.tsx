@@ -1,141 +1,86 @@
-interface CatProps {
-  /** 瞬きの位相をずらすための遅延（秒）。猫が一斉に瞬くと不自然になる。 */
-  blinkDelay?: number;
-}
-
-export function CatFace({ blinkDelay = 0 }: CatProps) {
-  return (
-    <svg className="cell-cat" viewBox="0 0 64 64" aria-hidden="true">
-      <path d="M15 27 L16.5 9 L32 20 Z" fill="#A0876F" />
-      <path d="M49 27 L47.5 9 L32 20 Z" fill="#A0876F" />
-      <path d="M19 25 L20 14 L29 20.5 Z" fill="#F0B6C4" />
-      <path d="M45 25 L44 14 L35 20.5 Z" fill="#F0B6C4" />
-      <ellipse cx="32" cy="36.5" rx="21" ry="18.5" fill="#BFA890" />
-      <g stroke="#93795F" strokeWidth="2.6" strokeLinecap="round" fill="none" opacity="0.85">
-        <path d="M32 19.5 v7.5" />
-        <path d="M24.5 21.5 l2.2 6.6" />
-        <path d="M39.5 21.5 l-2.2 6.6" />
-      </g>
-      <ellipse cx="32" cy="43.5" rx="12.5" ry="8" fill="#F3EAE0" />
-      <g className="cat-eyes" style={{ animationDelay: `${blinkDelay}s` }}>
-        <ellipse cx="23.8" cy="34.5" rx="4.1" ry="4.8" fill="#3F3229" />
-        <ellipse cx="40.2" cy="34.5" rx="4.1" ry="4.8" fill="#3F3229" />
-        <circle cx="25.3" cy="32.8" r="1.35" fill="#fff" />
-        <circle cx="41.7" cy="32.8" r="1.35" fill="#fff" />
-      </g>
-      <path d="M32 40.2 l3.1 2.5 -3.1 2.3 -3.1 -2.3 Z" fill="#E28FA5" />
-      <g stroke="#93795F" strokeWidth="1.7" fill="none" strokeLinecap="round">
-        <path d="M32 45 q-3.1 3 -6 0.4" />
-        <path d="M32 45 q3.1 3 6 0.4" />
-      </g>
-      <g stroke="#93795F" strokeWidth="1.5" strokeLinecap="round" opacity="0.5">
-        <path d="M18.5 40 h-9.5" />
-        <path d="M18.5 44 l-9 3" />
-        <path d="M45.5 40 h9.5" />
-        <path d="M45.5 44 l9 3" />
-      </g>
-    </svg>
-  );
-}
+// 参考にした画面のアイコンは PNG 素材だが、そのまま持ってくるのは相手の資産なので
+// 同じ色調・同じ太さで自前の SVG に描き起こしている。
 
 export function CrossMark() {
   return (
     <svg className="cell-cross" viewBox="0 0 24 24" aria-hidden="true">
-      <g stroke="currentColor" strokeWidth="4" strokeLinecap="round">
-        <path d="M5 5 L19 19" />
-        <path d="M19 5 L5 19" />
+      <g stroke="currentColor" strokeWidth="3.6" strokeLinecap="round">
+        <path d="M6 6 L18 18" />
+        <path d="M18 6 L6 18" />
       </g>
-    </svg>
-  );
-}
-
-export function Heart({ filled }: { filled: boolean }) {
-  return (
-    <svg className="heart" viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M12 20.4 C6.6 16.6 3 13.6 3 9.9 A4.6 4.6 0 0 1 12 7.6 A4.6 4.6 0 0 1 21 9.9 C21 13.6 17.4 16.6 12 20.4 Z"
-        fill={filled ? '#E8798E' : '#E9E2DC'}
-      />
-    </svg>
-  );
-}
-
-export function PawIcon() {
-  return (
-    <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true">
-      <g fill="currentColor">
-        <ellipse cx="8" cy="7.4" rx="2.1" ry="2.7" />
-        <ellipse cx="16" cy="7.4" rx="2.1" ry="2.7" />
-        <ellipse cx="3.9" cy="12.4" rx="1.9" ry="2.4" />
-        <ellipse cx="20.1" cy="12.4" rx="1.9" ry="2.4" />
-        <path d="M12 11.4 c3.4 0 6 2.6 6 5.3 c0 2.1 -1.7 3.2 -3.6 3.2 c-1 0 -1.7 -0.4 -2.4 -0.4 s-1.4 0.4 -2.4 0.4 C7.7 19.9 6 18.8 6 16.7 C6 14 8.6 11.4 12 11.4 Z" />
-      </g>
-    </svg>
-  );
-}
-
-const stroke = {
-  fill: 'none',
-  stroke: 'currentColor',
-  strokeWidth: 2,
-  strokeLinecap: 'round' as const,
-  strokeLinejoin: 'round' as const,
-};
-
-export function UndoIcon() {
-  return (
-    <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" {...stroke}>
-      <path d="M4 8 h9.5 a5.5 5.5 0 0 1 0 11 H8" />
-      <path d="M7.5 4 L3.6 8 L7.5 12" />
-    </svg>
-  );
-}
-
-export function ResetIcon() {
-  return (
-    <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" {...stroke}>
-      <path d="M20 12 a8 8 0 1 1 -2.6 -5.9" />
-      <path d="M20.4 4.2 v4.4 h-4.4" />
-    </svg>
-  );
-}
-
-export function HintIcon() {
-  return (
-    <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" {...stroke}>
-      <path d="M9.3 17.5 a6.2 6.2 0 1 1 5.4 0" />
-      <path d="M9.5 20.4 h5" />
-      <path d="M10.2 17.5 v2.9" />
-      <path d="M13.8 17.5 v2.9" />
     </svg>
   );
 }
 
 export function HelpIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" {...stroke}>
-      <circle cx="12" cy="12" r="9" />
-      <path d="M9.4 9.2 a2.7 2.7 0 1 1 3.4 3 v1.4" />
-      <path d="M12.8 17.3 h0.01" strokeWidth="2.4" />
+    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="9.4" fill="#9179D1" />
+      <path
+        d="M9.5 9.3 a2.6 2.6 0 1 1 3.2 2.9 v1.5"
+        fill="none"
+        stroke="#fff"
+        strokeWidth="2.1"
+        strokeLinecap="round"
+      />
+      <circle cx="12.6" cy="16.6" r="1.25" fill="#fff" />
     </svg>
   );
 }
 
-export function SoundIcon({ muted }: { muted: boolean }) {
+export function SettingsIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" {...stroke}>
-      <path d="M4 9.4 h3.4 L12 5.4 v13.2 L7.4 14.6 H4 Z" />
-      {muted ? (
-        <>
-          <path d="M16.2 9.6 L20.4 14.4" />
-          <path d="M20.4 9.6 L16.2 14.4" />
-        </>
-      ) : (
-        <>
-          <path d="M15.8 9.6 a3.6 3.6 0 0 1 0 4.8" />
-          <path d="M18.4 7.2 a7 7 0 0 1 0 9.6" />
-        </>
-      )}
+    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M12 2.4 l1.7 1.5 2.2 -0.5 0.9 2.1 2.1 0.9 -0.5 2.2 1.5 1.7 -1.5 1.7 0.5 2.2 -2.1 0.9 -0.9 2.1 -2.2 -0.5 -1.7 1.5 -1.7 -1.5 -2.2 0.5 -0.9 -2.1 -2.1 -0.9 0.5 -2.2 -1.5 -1.7 1.5 -1.7 -0.5 -2.2 2.1 -0.9 0.9 -2.1 2.2 0.5 Z"
+        fill="#9179D1"
+      />
+      <circle cx="12" cy="12" r="3.4" fill="#fff" />
+    </svg>
+  );
+}
+
+export function UndoIcon() {
+  return (
+    <svg width="40" height="40" viewBox="0 0 40 40" aria-hidden="true">
+      <g fill="none" stroke="#8B7ABF" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M9 15 h14.5 a7.5 7.5 0 0 1 0 15 H15" />
+        <path d="M14.5 9 L8 15 L14.5 21" />
+      </g>
+    </svg>
+  );
+}
+
+export function ResetIcon() {
+  return (
+    <svg width="40" height="40" viewBox="0 0 40 40" aria-hidden="true">
+      <g fill="none" stroke="#8B7ABF" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M31.5 20 a11.5 11.5 0 1 1 -3.6 -8.4" />
+        <path d="M32 9.5 v7 h-7" />
+      </g>
+    </svg>
+  );
+}
+
+export function HintIcon() {
+  return (
+    <svg width="40" height="40" viewBox="0 0 40 40" aria-hidden="true">
+      <path
+        d="M20 6.5 a9.6 9.6 0 0 1 5.6 17.4 c-1 0.8 -1.6 1.8 -1.7 3 h-7.8 c-0.1 -1.2 -0.7 -2.2 -1.7 -3 A9.6 9.6 0 0 1 20 6.5 Z"
+        fill="#F3C55A"
+      />
+      <path
+        d="M20 12.6 a4 4 0 0 0 -3.4 6"
+        fill="none"
+        stroke="#fff"
+        strokeWidth="2"
+        strokeLinecap="round"
+        opacity="0.75"
+      />
+      <g fill="none" stroke="#8B7ABF" strokeWidth="3.2" strokeLinecap="round">
+        <path d="M16.3 30.4 h7.4" />
+        <path d="M17.6 34 h4.8" />
+      </g>
     </svg>
   );
 }

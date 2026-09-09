@@ -2,7 +2,8 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useAnimationControls } from 'motion/react';
 import { useDrag } from '@use-gesture/react';
 import { CAT, CROSS, type GameState, type Mark } from '../core/game';
-import { CatFace, CrossMark } from './icons';
+import { Cat, type Mood } from './Cat';
+import { CrossMark } from './icons';
 
 /** この距離を超えて指が動いたらタップではなくドラッグとみなす。
  *  小さすぎると普通のタップが塗りになり、大きすぎると塗り始めが鈍る。 */
@@ -150,6 +151,7 @@ export function Board({ state, onTap, onPaint, onPaintEnd }: BoardProps) {
 
   const conflictSet = new Set(conflicts);
   const won = status === 'won';
+  const mood: Mood = status === 'won' ? 'happy' : status === 'lost' ? 'sad' : 'idle';
 
   // 勝ったとき、猫を上から順に跳ねさせるための並び順
   const catOrder = new Map<number, number>();
@@ -161,7 +163,11 @@ export function Board({ state, onTap, onPaint, onPaintEnd }: BoardProps) {
       {...bind()}
       ref={boardRef}
       className="board"
-      style={{ gridTemplateColumns: `repeat(${n}, 1fr)` }}
+      style={{
+        gridTemplateColumns: `repeat(${n}, 1fr)`,
+        // 行も明示しないと内容の高さで決まってしまい、猫を置いた瞬間に盤面がずれる
+        gridTemplateRows: `repeat(${n}, 1fr)`,
+      }}
       role="grid"
       aria-label={`${n}×${n} の盤面`}
     >
@@ -175,6 +181,8 @@ export function Board({ state, onTap, onPaint, onPaintEnd }: BoardProps) {
           conflict={conflictSet.has(i)}
           conflictToken={conflictToken}
           won={won}
+          lost={status === 'lost'}
+          mood={mood}
           winOrder={catOrder.get(i) ?? 0}
         />
       ))}
@@ -190,6 +198,8 @@ interface CellProps {
   conflict: boolean;
   conflictToken: number;
   won: boolean;
+  lost: boolean;
+  mood: Mood;
   winOrder: number;
 }
 
@@ -201,6 +211,8 @@ const Cell = memo(function Cell({
   conflict,
   conflictToken,
   won,
+  lost,
+  mood,
   winOrder,
 }: CellProps) {
   const controls = useAnimationControls();
@@ -223,6 +235,16 @@ const Cell = memo(function Cell({
     });
   }, [won, mark, winOrder, controls]);
 
+  // 失敗時、猫がうなだれて首を振る。
+  useEffect(() => {
+    if (!lost || mark !== CAT) return;
+    void controls.start({
+      rotate: [0, -7, 6, -4, 0],
+      y: [0, 3, 3, 3, 2],
+      transition: { duration: 0.75, ease: 'easeInOut' },
+    });
+  }, [lost, mark, controls]);
+
   return (
     <motion.div
       className="cell"
@@ -241,7 +263,7 @@ const Cell = memo(function Cell({
             exit={{ scale: 0, opacity: 0, transition: { duration: 0.12 } }}
             transition={{ type: 'spring', stiffness: 620, damping: 20, mass: 0.7 }}
           >
-            <CatFace blinkDelay={(index % 7) * 0.8} />
+            <Cat mood={mood} seed={index} />
           </motion.span>
         )}
         {mark === CROSS && (
