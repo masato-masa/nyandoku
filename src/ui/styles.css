@@ -1,0 +1,340 @@
+/* 配色と寸法は meowdoku の実画面から実測した値をそのまま使っている。
+   --r0〜--r3 は抽出した 4 色、--r4 以降は同じ彩度・明度帯に合わせて拡張した。 */
+:root {
+  --bg: #f6f5ef;
+  --board: #ffffff;
+  --title: #735056;
+  --pill-bg: #fbf1eb;
+  --pill-fg: #8a5a5a;
+  --muted: #a99089;
+  --line: #ece5df;
+
+  --cell-radius: 8px;
+  --board-radius: 16px;
+  --gap: 6px;
+  --pad: 16px;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  --r0: #e3ba46;
+  --r1: #9179d1;
+  --r2: #e6a8c1;
+  --r3: #c1658a;
+  --r4: #7fbfa6;
+  --r5: #e89b6c;
+  --r6: #7fa8d9;
+  --r7: #b5cf6b;
+  --r8: #d9756b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--title);
+  font-family: 'Open Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.app {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 16px 28px;
+}
+
+/* ---- ヘッダー ---- */
+.header {
+  width: 100%;
+  max-width: 690px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+}
+
+.progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  padding: 5px 11px 5px 7px;
+  border-radius: 999px;
+  background: var(--pill-bg);
+  color: var(--pill-fg);
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.title {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--title);
+  margin: 0;
+  white-space: nowrap;
+}
+
+.header-actions {
+  justify-self: end;
+  display: flex;
+  gap: 8px;
+}
+
+.icon-btn {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: #efeaf8;
+  color: #7d6bb0;
+  cursor: pointer;
+  transition: transform 0.15s var(--ease), background-color 0.15s var(--ease);
+}
+
+.icon-btn:hover {
+  background: #e5ddf5;
+}
+
+.icon-btn:active {
+  transform: scale(0.9);
+}
+
+.icon-btn[data-off='true'] {
+  background: var(--line);
+  color: var(--muted);
+}
+
+/* ---- ハート ---- */
+.hearts {
+  display: flex;
+  gap: 5px;
+  height: 20px;
+}
+
+.heart {
+  width: 18px;
+  height: 18px;
+}
+
+/* ---- ルールのピル ---- */
+.rules {
+  width: 100%;
+  max-width: 690px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.rule {
+  background: var(--pill-bg);
+  color: var(--pill-fg);
+  border-radius: 12px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+  text-align: center;
+  display: grid;
+  place-items: center;
+}
+
+/* ---- 盤面 ---- */
+.board {
+  width: min(92vw, 452px);
+  aspect-ratio: 1;
+  display: grid;
+  gap: var(--gap);
+  padding: var(--pad);
+  background: var(--board);
+  border-radius: var(--board-radius);
+  box-shadow:
+    0 1px 2px rgba(115, 80, 86, 0.05),
+    0 10px 30px rgba(115, 80, 86, 0.07);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: pointer;
+}
+
+.cell {
+  position: relative;
+  border-radius: var(--cell-radius);
+  display: grid;
+  place-items: center;
+  transition: filter 0.12s var(--ease);
+  will-change: transform;
+}
+
+.cell[data-pressed='true'] {
+  filter: brightness(0.92);
+}
+
+.cell-cat {
+  width: 82%;
+  height: 82%;
+  display: block;
+  pointer-events: none;
+}
+
+.cell-cross {
+  width: 30%;
+  height: 30%;
+  display: block;
+  pointer-events: none;
+  color: rgba(70, 48, 40, 0.42);
+}
+
+/* ---- フッター ---- */
+.footer {
+  display: flex;
+  gap: 22px;
+  align-items: center;
+}
+
+.tool {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #8c7ab8;
+  cursor: pointer;
+  transition: transform 0.15s var(--ease), background-color 0.15s var(--ease), opacity 0.15s var(--ease);
+}
+
+.tool:hover:not(:disabled) {
+  background: #f0ebf9;
+}
+
+.tool:active:not(:disabled) {
+  transform: scale(0.88);
+}
+
+.tool:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
+/* ---- 結果表示 ---- */
+.banner {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(246, 245, 239, 0.72);
+  backdrop-filter: blur(3px);
+  z-index: 10;
+}
+
+.banner-card {
+  background: #fff;
+  border-radius: 22px;
+  padding: 30px 34px;
+  text-align: center;
+  box-shadow: 0 18px 50px rgba(115, 80, 86, 0.16);
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  min-width: 250px;
+}
+
+.banner-card h2 {
+  margin: 4px 0 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--title);
+}
+
+.banner-card p {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.banner-btn {
+  border: 0;
+  border-radius: 999px;
+  padding: 11px 30px;
+  font: inherit;
+  font-weight: 700;
+  font-size: 15px;
+  color: #fff;
+  background: #9179d1;
+  cursor: pointer;
+  transition: transform 0.15s var(--ease), background-color 0.15s var(--ease);
+}
+
+.banner-btn:hover {
+  background: #8168c8;
+}
+
+.banner-btn:active {
+  transform: scale(0.94);
+}
+
+@media (max-width: 560px) {
+  .rules {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .rule {
+    padding: 7px 12px;
+    font-size: 12.5px;
+  }
+  .title {
+    font-size: 20px;
+  }
+}
+
+/* ---- マーク（猫・X）の器 ---- */
+.mark {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+}
+
+/* 考えているあいだ猫が瞬きする。個体ごとに遅延をずらして同期させない。 */
+.cat-eyes {
+  transform-origin: 50% 54%;
+  animation: cat-blink 5.6s var(--ease) infinite;
+}
+
+@keyframes cat-blink {
+  0%,
+  90%,
+  100% {
+    transform: scaleY(1);
+  }
+  94% {
+    transform: scaleY(0.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cat-eyes {
+    animation: none;
+  }
+}
+
+.result-cat {
+  width: 78px;
+  height: 78px;
+  display: grid;
+  place-items: center;
+}
+
+.result-cat .cell-cat {
+  width: 100%;
+  height: 100%;
+}
