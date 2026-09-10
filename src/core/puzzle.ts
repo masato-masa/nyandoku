@@ -235,6 +235,14 @@ export function countSolutions(n: number, wall: Uint8Array, numbers: Int8Array, 
 
 // ---- 難易度の測定 ----
 
+/** 背理法 1 回ぶんの中身。 */
+export interface ContradictionStep {
+  /** 仮定してから矛盾が出るまでに適用した推論の段数。人が読む手数。 */
+  depth: number;
+  /** そのうち被覆推論だった段数。数字推論より探すのが重い。 */
+  coverSteps: number;
+}
+
 export interface Analysis {
   /** 基本推論だけで最後まで解けたか。 */
   solvedBasic: boolean;
@@ -242,18 +250,13 @@ export interface Analysis {
   solved: boolean;
   /** 推論の往復回数。確定の連鎖がどれだけ続くか。 */
   rounds: number;
-  /** 数字から確定したマスの数。 */
+  /** 数字から確定したマスの数。作業量であって難しさではないので重みには入れていない。 */
   byNumber: number;
-  /** 視野の被覆から確定したマスの数。人にとってはこちらのほうが重い。 */
+  /** 被覆推論で確定したマスの数。被覆は 1 回につき 1 マスなので回数と同じ。 */
   byCover: number;
-  /** 背理法でしか確定できなかったマスの数。ここが 1 以上なら上級者向け。 */
-  byContradiction: number;
-  /**
-   * 各背理法で、矛盾に気づくまでに確定させた手数。
-   * 0 なら仮定した瞬間に破綻する（＝ほぼ確定系）。大きいほど先読みが要る。
-   */
-  contradictionDepths: number[];
-  /** そのうち最も深いもの。理不尽さの上限を測るための値。 */
+  /** 背理法 1 回ごとの内訳。 */
+  contradictions: ContradictionStep[];
+  /** 背理法の最大段数。理不尽さの上限を測るための値。 */
   maxContradictionDepth: number;
   /** 猫を置ける候補マスの数。探索の広さ。 */
   candidates: number;
@@ -275,8 +278,12 @@ interface Ctx {
 
 interface PropResult {
   contradiction: boolean;
-  byNumber: number;
-  byCover: number;
+  /** 確定したマス数。 */
+  numberCells: number;
+  coverCells: number;
+  /** 推論を適用した回数。連鎖の段数はこの合計。 */
+  numberSteps: number;
+  coverSteps: number;
   rounds: number;
 }
 
@@ -295,12 +302,30 @@ function seenFrom(ctx: Ctx, state: Uint8Array): Uint8Array {
  *
  *   A 数字  ある壁の数字が k のとき、まわりの猫が k 匹揃えば残りは空。
  *           空きマスを全部使わないと k に届かないなら残りは全部猫。
+ *           壁 1 つとその周囲 3x3 を見るだけで済む局所的な推論で、
+ *           数字付きの壁を順に当たれば必ず見つかる。
  *   B 被覆  まだ誰にも見えていないマスを見られる候補が 1 つしかないなら、そこは猫。
+ *           そのマスから 4 方向へ壁まで辿る必要があり、しかも「どの空きマスが
+ *           危ないか」を自分で見つけないと始まらない。探索の起点が無いぶん重い。
+ *
+ * マス数と段数を別々に数えている。数字推論は 1 回で複数マスを確定させるので、
+ * マス数は「波及の広さ」、段数は「読む手数」になり、意味が違う。
  */
 function propagate(ctx: Ctx, state: Uint8Array): PropResult {
   let rounds = 0;
-  let byNumber = 0;
-  let byCover = 0;
+  let numberCells = 0;
+  let coverCells = 0;
+  let numberSteps = 0;
+  let coverSteps = 0;
+
+  const result = (contradiction: boolean): PropResult => ({
+    contradiction,
+    numberCells,
+    coverCells,
+    numberSteps,
+    coverSteps,
+    rounds,
+  });
 
   for (;;) {
     let changed = false;
@@ -315,16 +340,18 @@ function propagate(ctx: Ctx, state: Uint8Array): PropResult {
         if (state[c] === IS_CAT) cats++;
         else if (state[c] === UNKNOWN) unknown.push(c);
       }
-      if (cats > want) return { contradiction: true, byNumber, byCover, rounds };
-      if (cats + unknown.length < want) return { contradiction: true, byNumber, byCover, rounds };
+      if (cats > want) return result(true);
+      if (cats + unknown.length < want) return result(true);
       if (unknown.length === 0) continue;
       if (cats === want) {
         for (const c of unknown) state[c] = IS_EMPTY;
-        byNumber += unknown.length;
+        numberCells += unknown.length;
+        numberSteps++;
         changed = true;
       } else if (cats + unknown.length === want) {
         for (const c of unknown) state[c] = IS_CAT;
-        byNumber += unknown.length;
+        numberCells += unknown.length;
+        numberSteps++;
         changed = true;
       }
     }
@@ -340,16 +367,18 @@ function propagate(ctx: Ctx, state: Uint8Array): PropResult {
         only = x;
         if (count > 1) break;
       }
-      if (count === 0) return { contradiction: true, byNumber, byCover, rounds };
+      if (count === 0) return result(true);
       if (count === 1 && state[only] === UNKNOWN) {
         state[only] = IS_CAT;
-        byCover++;
+        coverCells++;
+        coverSteps++;
         changed = true;
       }
     }
 
-    if (!changed) return { contradiction: false, byNumber, byCover, rounds };
-    if (rounds > 200) return { contradiction: false, byNumber, byCover, rounds };
+    if (!changed) return result(false);
+    // 念のための安全弁。通常ここには達しない。
+    if (rounds > 200) return result(false);
   }
 }
 
@@ -363,11 +392,14 @@ function isSolved(ctx: Ctx, state: Uint8Array): boolean {
 /**
  * 人が使う推論を機械的に回して、どこまで確定できるかを測る。
  *
- * まず基本推論（数字と被覆）だけで回し、詰まったら背理法に降りる。
- * 背理法は「あるマスを猫だと仮定して基本推論を回し、矛盾したら猫ではない」という
- * 1 手だけの仮定。人がやる「ここに置くと後で破綻するから置けない」に相当する。
+ * まず基本推論だけで回し、詰まったら背理法に降りる。背理法は 1 マスだけ仮定して
+ * 基本推論を回す形で、入れ子にはしない。二重の背理法を要求する問題は
+ * 「解けない」と判定されて捨てられる。
  *
- * 「解が一意か」の検査とは別物。一意でも基本推論だけでは詰まる問題は普通にある。
+ * 背理法の深さは「仮定してから矛盾が出るまでに適用した推論の段数」で測る。
+ * 当初は確定したマス数で測っていたが、それは波及の広さであって読む手数ではない。
+ * 数字推論は 1 回で 3 マス確定させることもあるので、マス数で測ると
+ * 「2 段しか読んでいないのに深さ 5」といった誤判定が起きていた。
  */
 export function analyse(
   n: number,
@@ -393,8 +425,7 @@ export function analyse(
   let rounds = 0;
   let byNumber = 0;
   let byCover = 0;
-  let byContradiction = 0;
-  const depths: number[] = [];
+  const contradictions: ContradictionStep[] = [];
   let solvedBasic = false;
   let broken = false;
   let first = true;
@@ -402,8 +433,8 @@ export function analyse(
   for (;;) {
     const r = propagate(ctx, state);
     rounds += r.rounds;
-    byNumber += r.byNumber;
-    byCover += r.byCover;
+    byNumber += r.numberCells;
+    byCover += r.coverCells;
     if (r.contradiction) {
       broken = true;
       break;
@@ -418,31 +449,31 @@ export function analyse(
 
     // 基本推論で詰まった。1 マスだけ仮定して矛盾を探す。
     //
-    // 人は「一番わかりやすい矛盾」から手をつけるので、最初に見つかったものではなく
-    // 最も浅い矛盾を採用する。最初に当たったものを使うと、実は 1 手で気づける矛盾が
+    // 人は一番わかりやすい矛盾から手をつけるので、最初に見つかったものではなく
+    // 最も浅い矛盾を採用する。最初に当たったものを使うと、実は 2 段で気づける矛盾が
     // 別のマスにあるのに深いほうを選んでしまい、難易度を過大に見積もる。
-    let bestTrial: { cell: number; assume: number; depth: number } | null = null;
+    let best: { cell: number; assume: number; depth: number; coverSteps: number } | null = null;
 
     for (const [x] of masks) {
       if (state[x] !== UNKNOWN) continue;
       for (const guess of [IS_CAT, IS_EMPTY]) {
         const trial = state.slice();
         trial[x] = guess;
-        const r = propagate(ctx, trial);
-        if (!r.contradiction) continue;
-        // 矛盾に気づくまでに確定させた手数。0 なら仮定した瞬間に破綻する。
-        const depth = r.byNumber + r.byCover;
-        if (!bestTrial || depth < bestTrial.depth) bestTrial = { cell: x, assume: guess, depth };
-        if (depth === 0) break;
+        const probe = propagate(ctx, trial);
+        if (!probe.contradiction) continue;
+        const depth = probe.numberSteps + probe.coverSteps;
+        if (!best || depth < best.depth) {
+          best = { cell: x, assume: guess, depth, coverSteps: probe.coverSteps };
+        }
+        if (depth <= 1) break;
       }
-      if (bestTrial && bestTrial.depth === 0) break;
+      if (best && best.depth <= 1) break;
     }
 
-    if (!bestTrial) break; // 背理法でも進まない。ここで詰み。
+    if (!best) break; // 背理法でも進まない。ここで詰み。
 
-    state[bestTrial.cell] = bestTrial.assume === IS_CAT ? IS_EMPTY : IS_CAT;
-    byContradiction++;
-    depths.push(bestTrial.depth);
+    state[best.cell] = best.assume === IS_CAT ? IS_EMPTY : IS_CAT;
+    contradictions.push({ depth: best.depth, coverSteps: best.coverSteps });
   }
 
   const solved = !broken && isSolved(ctx, state);
@@ -453,9 +484,10 @@ export function analyse(
     rounds,
     byNumber,
     byCover,
-    byContradiction,
-    contradictionDepths: depths,
-    maxContradictionDepth: depths.length ? Math.max(...depths) : 0,
+    contradictions,
+    maxContradictionDepth: contradictions.length
+      ? Math.max(...contradictions.map((c) => c.depth))
+      : 0,
     candidates: masks.size,
   };
 }
@@ -471,6 +503,7 @@ export function analyse(
  * candidates を重くするとサイズがそのまま難易度になり、高いレベルに大きい盤しか
  * 出なくなる。推論の深さ（byCover と rounds）を重くすることで、小さい盤でも
  * 難しくなりうる形にしている。
+ * 数字推論の回数は入れていない。作業量であって難しさではないため。
  */
 export const DIFFICULTY_WEIGHTS = {
   candidates: 0.6,
@@ -479,37 +512,26 @@ export const DIFFICULTY_WEIGHTS = {
 } as const;
 
 /**
- * 背理法 1 回あたりの重み。深さ（矛盾に気づくまでに確定させた手数）で変える。
+ * 背理法 1 回あたりの重み。段数（仮定してから矛盾までに適用した推論の回数）で変える。
  *
- * 深さ 0〜1 は実測で一度も出ない。仮定した瞬間に破綻するようなマスは、
- * 基本推論がすでに×にしているため。つまり背理法に降りた時点で最低 2 手の
- * 先読みが確定していて、確定系との境界がきれいに分かれている。
+ * 中に被覆推論が混ざるとさらに重い。数字を追っていた頭を「このマスは誰が見るのか」
+ * という別の視点に切り替えさせられるため、段数が同じでも体感が違う。
  */
-const CONTRADICTION_COST: Record<number, number> = { 2: 8, 3: 14, 4: 20 };
+const CONTRADICTION_STEP_COST: Record<number, number> = { 0: 4, 1: 8, 2: 14, 3: 20, 4: 26 };
+const COVER_IN_CONTRADICTION = 5;
 
 /**
- * 出してよい背理法の深さの上限。これを超える問題は生成しない。
- * 実測（レベル 1〜60）の分布は 深さ2:14回 / 3:10回 / 4:2回 / 5:3回 で、
- * 深さ 4 までは実際に遊んで理不尽さが無いことを確認している。
+ * 出してよい背理法の段数の上限。これを超える問題は生成しない。
+ * 暗算で追える限界という判断。
  */
 export const MAX_CONTRADICTION_DEPTH = 4;
 
-/**
- * 表示用の 5 段階。レベル 1〜80 の点数分布（最小19・最大95、
- * 四分位で 51 / 59 / 66 / 74）を見て区切っている。
- * 遊んで「ちょうどいい」と感じたレベル 15 が 3 になるよう合わせた。
- */
-export function difficultyBand(score: number): 1 | 2 | 3 | 4 | 5 {
-  if (score < 32) return 1;
-  if (score < 47) return 2;
-  if (score < 62) return 3;
-  if (score < 77) return 4;
-  return 5;
-}
-
 export function difficultyOf(a: Analysis): number {
-  const contradiction = a.contradictionDepths.reduce(
-    (sum, d) => sum + (CONTRADICTION_COST[d] ?? CONTRADICTION_COST[MAX_CONTRADICTION_DEPTH]),
+  const contradiction = a.contradictions.reduce(
+    (sum, c) =>
+      sum +
+      (CONTRADICTION_STEP_COST[Math.min(c.depth, MAX_CONTRADICTION_DEPTH)] ?? 26) +
+      c.coverSteps * COVER_IN_CONTRADICTION,
     0,
   );
   return (
@@ -519,6 +541,15 @@ export function difficultyOf(a: Analysis): number {
     contradiction
   );
 }
+
+export function difficultyBand(score: number): 1 | 2 | 3 | 4 | 5 {
+  if (score < 38) return 1;
+  if (score < 53) return 2;
+  if (score < 66) return 3;
+  if (score < 80) return 4;
+  return 5;
+}
+
 
 
 /**
@@ -568,9 +599,16 @@ function sampleKnobs(level: number, rng: () => number): Knobs {
   const n = sampleSize(level, rng);
   const minDensity = n >= 8 ? 0.4 : n === 7 ? 0.36 : 0.28;
   const minRatio = n >= 7 ? 0.72 : 0.6;
+
+  // レベルが上がるほど壁を減らす側に寄せる。
+  // 壁が少ないほど視線が伸びて連鎖が長くなり、被覆推論が混ざりやすくなる。
+  // 一様に引くと 0.45〜0.50 ばかり当たって浅い問題しか出なかった。
+  const t = Math.min(1, (level - 1) / 20);
+  const skew = Math.pow(rng(), 1 + 1.6 * t);
+
   return {
     n,
-    wallDensity: minDensity + rng() * (0.5 - minDensity),
+    wallDensity: minDensity + skew * (0.5 - minDensity),
     numberRatio: minRatio + rng() * (1 - minRatio),
   };
 }
@@ -648,6 +686,9 @@ function tryGenerate(knobs: Knobs, rng: () => number, attempts: number): RawPuzz
   return null;
 }
 
+/** 目標をこれ以上超える候補は採らない。難易度の並びが壊れるほうが害が大きい。 */
+const OVERSHOOT_LIMIT = 1.4;
+
 /**
  * 目標難易度にどれだけ近ければ十分とみなすか。
  * 厳しくすると狙いは正確になるが、条件に合う盤面を探し続けて生成が遅くなる。
@@ -659,7 +700,7 @@ const CLOSE_ENOUGH = 0.13;
  */
 const KNOB_ATTEMPTS = 18;
 /** 1 組のつまみで盤面を作り直す上限。 */
-const BOARD_ATTEMPTS = 260;
+const BOARD_ATTEMPTS = 600;
 
 /**
  * 一度作った盤面は覚えておく。生成は決定的なので、作り直しても同じものしか
@@ -686,7 +727,18 @@ export function generateForLevel(level: number): Puzzle {
   const rng = mulberry32(level * 7919 + 104729);
   const target = targetDifficulty(level, rng);
 
-  let best: { raw: RawPuzzle; knobs: Knobs; analysis: Analysis; score: number } | null = null;
+  type Candidate = { raw: RawPuzzle; knobs: Knobs; analysis: Analysis; score: number };
+
+  // 高いレベルでは先読みを必須にする。
+  // 点数で誘導しようとしても、難易度は盤面の広さと被覆推論だけで目標に届いてしまうため、
+  // 選択器が深い連鎖を選ぶ理由が生まれなかった。条件として課すほうが確実。
+  const requiredDepth = level >= 35 ? 2 : level >= 18 ? 1 : 0;
+
+  let best: Candidate | null = null; // 条件を満たすもののうち目標に近い
+  let fallback: Candidate | null = null; // 条件を満たすものが無かったとき用
+
+  const closer = (a: Candidate | null, b: Candidate) =>
+    !a || Math.abs(b.score - target) < Math.abs(a.score - target) ? b : a;
 
   for (let i = 0; i < KNOB_ATTEMPTS; i++) {
     const knobs = sampleKnobs(level, rng);
@@ -696,14 +748,21 @@ export function generateForLevel(level: number): Puzzle {
     const analysis = analyse(raw.n, raw.wall, raw.numbers, raw.candidate);
     // 推測が要る問題は出さない
     if (!analysis.solved) continue;
-    // 深すぎる先読みを要求する問題も出さない。解けはするが理不尽になる。
+    // 深すぎる先読みを要求する問題も出さない。解けはするが暗算では追えない。
     if (analysis.maxContradictionDepth > MAX_CONTRADICTION_DEPTH) continue;
 
-    const score = difficultyOf(analysis);
-    const gap = Math.abs(score - target);
-    if (!best || gap < Math.abs(best.score - target)) best = { raw, knobs, analysis, score };
-    if (gap <= target * CLOSE_ENOUGH) break;
+    const candidate: Candidate = { raw, knobs, analysis, score: difficultyOf(analysis) };
+    fallback = closer(fallback, candidate);
+
+    if (analysis.maxContradictionDepth < requiredDepth) continue;
+    // 条件を満たしていても、目標を大きく超える problem は帯から外れて浮くだけなので採らない。
+    // 先読みのある面より、難易度の並びが壊れないことを優先する。
+    if (candidate.score > target * OVERSHOOT_LIMIT) continue;
+    best = closer(best, candidate);
+    if (Math.abs(candidate.score - target) <= target * CLOSE_ENOUGH) break;
   }
+
+  best = best ?? fallback;
 
   if (!best) {
     // どれも条件を満たさなかった。作りやすい設定で妥協する。
