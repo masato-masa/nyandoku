@@ -34,12 +34,10 @@ export interface GameState {
   hintsUsed: number;
 }
 
-export function createGame(level: number): GameState {
-  // 盤面の大きさはレベルから直接決めず、難易度の目標に合う候補の中から選ばれる。
-  // そのため高いレベルでも小さい盤面が出る。
-  const puzzle = generateForLevel(level);
+/** できあがった盤面からゲームを始める。生成は別スレッドで行うので分けてある。 */
+export function createGameFrom(puzzle: Puzzle): GameState {
   return {
-    level,
+    level: puzzle.level,
     puzzle,
     marks: new Uint8Array(puzzle.n * puzzle.n),
     status: 'playing',
@@ -49,6 +47,13 @@ export function createGame(level: number): GameState {
     rejectToken: 0,
     hintsUsed: 0,
   };
+}
+
+/** その場で生成してから始める。Worker が使えない環境向けの経路。 */
+export function createGame(level: number): GameState {
+  // 盤面の大きさはレベルから直接決めず、難易度の目標に合う候補の中から選ばれる。
+  // そのため高いレベルでも小さい盤面が出る。
+  return createGameFrom(generateForLevel(level));
 }
 
 export function catsOf(marks: Uint8Array): Set<number> {

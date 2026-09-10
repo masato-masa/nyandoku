@@ -179,7 +179,20 @@ function findCover(
   return allCovered(n, wall, seen) ? cats : null;
 }
 
-/** ルールを満たす配置が何通りあるか。limit に達したら打ち切る。 */
+/**
+ * 探索の打ち切り点。ここを超えたら「一意ではない」とみなして捨てる。
+ *
+ * 壁と数字が少ない盤面では、この探索が組合せ爆発して 1 回で数秒かかることがある。
+ * 試行回数で総枠を切っても、1 回あたりのコストが桁違いに動くので時間は抑えられない
+ * （実測: 総枠 20000 回でも Lv31 が 11 秒）。時間ではなく探索した節点の数で切る
+ * ことで、遅いマシンでも同じ盤面が出る性質を保ったまま最悪時間を抑えられる。
+ *
+ * コストは採用された盤面ではなく捨てられた候補側にある。最終盤面の判定は
+ * 0.1ms しかかからないのに、上限まで探索して捨てる候補が積み重なって秒単位になる。
+ */
+const SOLVER_NODE_BUDGET = 4000;
+
+/** ルールを満たす配置が何通りあるか。limit か節点の上限に達したら打ち切る。 */
 export function countSolutions(n: number, wall: Uint8Array, numbers: Int8Array, limit = 2): number {
   const walls: number[] = [];
   for (let i = 0; i < n * n; i++) if (wall[i] && numbers[i] >= 0) walls.push(i);
@@ -190,6 +203,8 @@ export function countSolutions(n: number, wall: Uint8Array, numbers: Int8Array, 
 
   const state = new Map<number, boolean>();
   let found = 0;
+  let nodes = 0;
+  let exhausted = false;
 
   const finish = () => {
     const cats: number[] = [];
@@ -198,7 +213,11 @@ export function countSolutions(n: number, wall: Uint8Array, numbers: Int8Array, 
   };
 
   const rec = (k: number): void => {
-    if (found >= limit) return;
+    if (found >= limit || exhausted) return;
+    if (++nodes > SOLVER_NODE_BUDGET) {
+      exhausted = true;
+      return;
+    }
     if (k === order.length) {
       finish();
       return;
@@ -230,13 +249,19 @@ export function countSolutions(n: number, wall: Uint8Array, numbers: Int8Array, 
   };
 
   rec(0);
-  return found;
+  // 打ち切った場合は一意だと言い切れないので、捨てさせる
+  return exhausted ? limit : found;
 }
 
 // ---- 難易度の測定 ----
 
 /** 背理法 1 回ぶんの中身。 */
 export interface ContradictionStep {
+  /**
+   * 手をつけた分岐の幅。その数字のまわりに未確定マスが何個残っていたか。
+   * 2 なら二択で、片方を試せば済む。多いほど「どこから考えるか」自体が難しい。
+   */
+  branchWidth: number;
   /** 仮定してから矛盾が出るまでに適用した推論の段数。人が読む手数。 */
   depth: number;
   /** そのうち被覆推論だった段数。数字推論より探すのが重い。 */
@@ -274,6 +299,24 @@ interface Ctx {
   masks: Map<number, Uint8Array>;
   numberedWalls: number[];
   wallNbrs: Map<number, number[]>;
+  /** そのマスを取り囲んでいる数字付きの壁。分岐の幅を測るのに使う。 */
+  wallsOfCell: Map<number, number[]>;
+}
+
+/**
+ * そのマスから背理法を始めるときの分岐の幅。
+ * そのマスが属する数字のうち、まだ未確定のマスが最も少ないものの個数。
+ * 2 なら二択。人は選択肢の少ないところから手をつけるので、この値が
+ * そのまま「取りかかりやすさ」になる。
+ */
+function branchWidth(ctx: Ctx, state: Uint8Array, cell: number): number {
+  let best = Number.POSITIVE_INFINITY;
+  for (const w of ctx.wallsOfCell.get(cell) ?? []) {
+    let unknown = 0;
+    for (const c of ctx.wallNbrs.get(w)!) if (state[c] === UNKNOWN) unknown++;
+    if (unknown >= 2 && unknown < best) best = unknown;
+  }
+  return Number.isFinite(best) ? best : 2;
 }
 
 interface PropResult {
@@ -454,7 +497,16 @@ export function analyse(
   const wallNbrs = new Map<number, number[]>();
   for (const w of numberedWalls) wallNbrs.set(w, neighbours8(n, w).filter((c) => !wall[c]));
 
-  const ctx: Ctx = { n, size, wall, numbers, masks, numberedWalls, wallNbrs };
+  const wallsOfCell = new Map<number, number[]>();
+  for (const w of numberedWalls) {
+    for (const c of wallNbrs.get(w)!) {
+      const list = wallsOfCell.get(c);
+      if (list) list.push(w);
+      else wallsOfCell.set(c, [w]);
+    }
+  }
+
+  const ctx: Ctx = { n, size, wall, numbers, masks, numberedWalls, wallNbrs, wallsOfCell };
 
   const state = new Uint8Array(size);
   // 猫を置けないマスは最初から空で確定している
@@ -487,31 +539,57 @@ export function analyse(
 
     // 基本推論で詰まった。1 マスだけ仮定して矛盾を探す。
     //
-    // 人は一番わかりやすい矛盾から手をつけるので、最初に見つかったものではなく
-    // 最も浅い矛盾を採用する。最初に当たったものを使うと、実は 2 段で気づける矛盾が
-    // 別のマスにあるのに深いほうを選んでしまい、難易度を過大に見積もる。
-    let best: { cell: number; assume: number; depth: number; coverSteps: number } | null = null;
-
+    // 人は「まだ 2 マスしか残っていない数字」のような、選択肢の少ないところから
+    // 手をつける。盤面中を全部試して最も浅い矛盾を探すわけではない。
+    // そこで、まず最も狭い分岐に絞り、その中で最も浅い矛盾を採る。
+    //
+    // 全体から最浅を採る作りだと、実測ではどの局面でも 1 段が見つかってしまい
+    // （壁が密なので、どこに仮定しても 1 波で近くの壁が破綻する）、
+    // 深さが難易度の軸として機能しなくなっていた。
+    let narrowest = Number.POSITIVE_INFINITY;
+    const widths = new Map<number, number>();
     for (const [x] of masks) {
       if (state[x] !== UNKNOWN) continue;
+      const w = branchWidth(ctx, state, x);
+      widths.set(x, w);
+      if (w < narrowest) narrowest = w;
+    }
+
+    let best: {
+      cell: number;
+      assume: number;
+      depth: number;
+      coverSteps: number;
+      width: number;
+    } | null = null;
+
+    for (const [x, w] of widths) {
+      if (w !== narrowest) continue;
       for (const guess of [IS_CAT, IS_EMPTY]) {
         const trial = state.slice();
         trial[x] = guess;
         const probe = propagate(ctx, trial);
         if (!probe.contradiction) continue;
-        const steps = probe.levels;
-        if (!best || steps < best.depth) {
-          best = { cell: x, assume: guess, depth: steps, coverSteps: probe.coverSteps };
+        if (!best || probe.levels < best.depth) {
+          best = {
+            cell: x,
+            assume: guess,
+            depth: probe.levels,
+            coverSteps: probe.coverSteps,
+            width: w,
+          };
         }
-        if (steps <= 1) break;
       }
-      if (best && best.depth <= 1) break;
     }
 
     if (!best) break; // 背理法でも進まない。ここで詰み。
 
     state[best.cell] = best.assume === IS_CAT ? IS_EMPTY : IS_CAT;
-    contradictions.push({ depth: best.depth, coverSteps: best.coverSteps });
+    contradictions.push({
+      branchWidth: best.width,
+      depth: best.depth,
+      coverSteps: best.coverSteps,
+    });
   }
 
   const solved = !broken && isSolved(ctx, state);
@@ -550,17 +628,23 @@ export const DIFFICULTY_WEIGHTS = {
 } as const;
 
 /**
- * 背理法 1 回あたりの重み。段数（仮定してから矛盾までに適用した推論の回数）で変える。
+ * 背理法 1 回あたりの重み。
  *
- * 中に被覆推論が混ざるとさらに重い。数字を追っていた頭を「このマスは誰が見るのか」
- * という別の視点に切り替えさせられるため、段数が同じでも体感が違う。
+ * 基準は「最も狭い分岐の中で最も浅い矛盾」で、そこの段数で点をつける。
+ * そのうえで、そもそも二択の状況が無く三択・四択からしか入れない局面は
+ * 取りかかり自体が難しいので、幅のぶんを加算する。
  *
- * 背理法以外の重みより意図的に大きくしてある。高いレベルで背理法を増やしたいとき、
- * 「レベル N 以上は背理法必須」と条件で縛るのは難易度ではなくテーマ指定になる。
- * 他の要素だけでは目標点に届きにくくしておけば、選択器が自然と背理法つきの
- * 盤面を選ぶ。
+ * 段数は実測ではほとんど 1 段になる（35 局面中 34 局面）。これは理論的な
+ * 必然ではなく、今の盤面構成（壁が密で数字が多い）ゆえの結果で、壁を減らせば
+ * 段数は伸びる。レベルが上がって目標点が高くなると、二択 1 段では届かなくなり、
+ * 三択や 2 段以上の盤面が選ばれるようになる想定。
+ *
+ * 連鎖の中に被覆推論が混ざるとさらに重い。数字を追っていた頭を
+ * 「このマスは誰が見るのか」に切り替えさせられるため。
  */
-const CONTRADICTION_STEP_COST: Record<number, number> = { 0: 8, 1: 14, 2: 22, 3: 30, 4: 38 };
+const DEPTH_COST: Record<number, number> = { 1: 12, 2: 20, 3: 28, 4: 36 };
+const WIDTH_BONUS: Record<number, number> = { 2: 0, 3: 6, 4: 12 };
+const WIDE_BRANCH_BONUS = 18;
 const COVER_IN_CONTRADICTION = 5;
 
 /**
@@ -570,13 +654,11 @@ const COVER_IN_CONTRADICTION = 5;
 export const MAX_CONTRADICTION_DEPTH = 4;
 
 export function difficultyOf(a: Analysis): number {
-  const contradiction = a.contradictions.reduce(
-    (sum, c) =>
-      sum +
-      (CONTRADICTION_STEP_COST[Math.min(c.depth, MAX_CONTRADICTION_DEPTH)] ?? 26) +
-      c.coverSteps * COVER_IN_CONTRADICTION,
-    0,
-  );
+  const contradiction = a.contradictions.reduce((sum, c) => {
+    const depth = DEPTH_COST[Math.min(c.depth, MAX_CONTRADICTION_DEPTH)] ?? 36;
+    const width = WIDTH_BONUS[c.branchWidth] ?? WIDE_BRANCH_BONUS;
+    return sum + depth + width + c.coverSteps * COVER_IN_CONTRADICTION;
+  }, 0);
   return (
     a.candidates * DIFFICULTY_WEIGHTS.candidates +
     a.byCover * DIFFICULTY_WEIGHTS.byCover +
@@ -585,11 +667,15 @@ export function difficultyOf(a: Analysis): number {
   );
 }
 
+/**
+ * 表示用の 5 段階。レベル 1〜60 の点数分布を見て区切っている。
+ * 遊んで「ちょうどいい」と感じたレベル 15 が 3 になるよう合わせた。
+ */
 export function difficultyBand(score: number): 1 | 2 | 3 | 4 | 5 {
-  if (score < 38) return 1;
-  if (score < 52) return 2;
-  if (score < 64) return 3;
-  if (score < 76) return 4;
+  if (score < 36) return 1;
+  if (score < 50) return 2;
+  if (score < 62) return 3;
+  if (score < 72) return 4;
   return 5;
 }
 
@@ -640,8 +726,12 @@ function sampleSize(level: number, rng: () => number): number {
  */
 function sampleKnobs(level: number, rng: () => number): Knobs {
   const n = sampleSize(level, rng);
-  const minDensity = n >= 8 ? 0.4 : n === 7 ? 0.36 : 0.28;
-  const minRatio = n >= 7 ? 0.72 : 0.6;
+  // レベルが上がるほど壁と数字を減らせるようにする。手がかりが減るほど
+  // 分岐が広がり連鎖も伸びるが、生成コストは跳ね上がる。次のレベルを裏で
+  // 先に作っているので、そのぶんの時間は払える。
+  const relax = Math.min(1, (level - 1) / 30);
+  const minDensity = (n >= 8 ? 0.4 : n === 7 ? 0.36 : 0.28) - 0.06 * relax;
+  const minRatio = (n >= 7 ? 0.72 : 0.6) - 0.12 * relax;
 
   // レベルが上がるほど壁を減らす側に寄せる。
   // 壁が少ないほど視線が伸びて連鎖が長くなり、被覆推論が混ざりやすくなる。
@@ -664,11 +754,20 @@ interface RawPuzzle {
   solution: number[];
 }
 
-/** つまみ 1 組から盤面を 1 つ作る。作れなければ null。 */
-function tryGenerate(knobs: Knobs, rng: () => number, attempts: number): RawPuzzle | null {
+/**
+ * つまみ 1 組から盤面を 1 つ作る。作れなければ null。
+ * 使った試行回数も返す。全体の予算を回すのに要る。
+ */
+function tryGenerate(
+  knobs: Knobs,
+  rng: () => number,
+  attempts: number,
+): { raw: RawPuzzle | null; used: number } {
   const { n, wallDensity, numberRatio } = knobs;
+  let used = 0;
 
   for (let attempt = 0; attempt < attempts; attempt++) {
+    used++;
     const wall = new Uint8Array(n * n);
     for (let i = 0; i < n * n; i++) if (rng() < wallDensity) wall[i] = 1;
 
@@ -724,9 +823,9 @@ function tryGenerate(knobs: Knobs, rng: () => number, attempts: number): RawPuzz
 
     if (countSolutions(n, wall, numbers, 2) !== 1) continue;
 
-    return { n, wall, numbers, candidate, solution: cats };
+    return { raw: { n, wall, numbers, candidate, solution: cats }, used };
   }
-  return null;
+  return { raw: null, used };
 }
 
 /**
@@ -738,20 +837,15 @@ const CLOSE_ENOUGH = 0.13;
  * つまみを引き直す回数。時間ではなく回数で区切っているのは、
  * 実行速度で結果が変わると「同じレベルは同じ盤面」が崩れるため。
  */
-const KNOB_ATTEMPTS = 18;
+const KNOB_ATTEMPTS = 44;
 /** 1 組のつまみで盤面を作り直す上限。 */
-const BOARD_ATTEMPTS = 600;
-
+const BOARD_ATTEMPTS = 2200;
 /**
- * 一度作った盤面は覚えておく。生成は決定的なので、作り直しても同じものしか
- * 出てこない。同じレベルを開き直すたびに数百ミリ秒待たされるのは無駄。
+ * 1 レベルの生成で使える盤面試行の総数。最悪の生成時間を決める値。
+ * 20000 でおよそ 2 秒。次のレベルは裏で先に作っているので、
+ * 実際に待たされるのは初回とレベル一覧から飛んだときだけ。
  */
-const cache = new Map<number, Puzzle>();
-
-/** すでに作ってあるならそれを返す。無ければ null（生成はしない）。 */
-export function peekLevel(level: number): Puzzle | null {
-  return cache.get(level) ?? null;
-}
+const TOTAL_BOARD_ATTEMPTS = 20000;
 
 /**
  * レベルから盤面を作る。同じレベルなら必ず同じ盤面になる。
@@ -761,9 +855,6 @@ export function peekLevel(level: number): Puzzle | null {
  * 小さい盤面が出るし、レベルと難しさは「傾向として」しか結び付かない。
  */
 export function generateForLevel(level: number): Puzzle {
-  const cached = cache.get(level);
-  if (cached) return cached;
-
   const rng = mulberry32(level * 7919 + 104729);
   const target = targetDifficulty(level, rng);
 
@@ -777,9 +868,15 @@ export function generateForLevel(level: number): Puzzle {
   const closer = (a: Candidate | null, b: Candidate) =>
     !a || Math.abs(b.score - target) < Math.abs(a.score - target) ? b : a;
 
-  for (let i = 0; i < KNOB_ATTEMPTS; i++) {
+  // 総枠。つまみ 1 組あたりの上限だけだと、当たりの悪い組が続いたときに
+  // 最悪 9 秒近くかかることがあった（実測 Lv31 で 8705ms）。時間ではなく
+  // 回数で区切ることで、遅いマシンでも同じ盤面が出る性質を保つ。
+  let budget = TOTAL_BOARD_ATTEMPTS;
+
+  for (let i = 0; i < KNOB_ATTEMPTS && budget > 0; i++) {
     const knobs = sampleKnobs(level, rng);
-    const raw = tryGenerate(knobs, rng, BOARD_ATTEMPTS);
+    const { raw, used } = tryGenerate(knobs, rng, Math.min(BOARD_ATTEMPTS, budget));
+    budget -= used;
     if (!raw) continue;
 
     const analysis = analyse(raw.n, raw.wall, raw.numbers, raw.candidate);
@@ -796,7 +893,7 @@ export function generateForLevel(level: number): Puzzle {
   if (!best) {
     // どれも条件を満たさなかった。作りやすい設定で妥協する。
     const knobs: Knobs = { n: 6, wallDensity: 0.45, numberRatio: 0.9 };
-    const raw = tryGenerate(knobs, rng, 4000);
+    const { raw } = tryGenerate(knobs, rng, 4000);
     if (!raw) throw new Error(`レベル ${level} の盤面を生成できませんでした`);
     const analysis = analyse(raw.n, raw.wall, raw.numbers, raw.candidate);
     best = { raw, knobs, analysis, score: difficultyOf(analysis) };
@@ -813,29 +910,7 @@ export function generateForLevel(level: number): Puzzle {
     difficulty: best.score,
     analysis: best.analysis,
   };
-  cache.set(level, puzzle);
   return puzzle;
-}
-
-/**
- * 次に遊ぶであろうレベルを、手が空いているときに先に作っておく。
- * 「次のレベルへ」を押した瞬間の待ちを消すためのもの。
- */
-export function prefetchLevel(level: number): void {
-  if (cache.has(level)) return;
-  const idle = (cb: () => void) => {
-    const ric = (globalThis as { requestIdleCallback?: (cb: () => void) => void })
-      .requestIdleCallback;
-    if (ric) ric(cb);
-    else setTimeout(cb, 200);
-  };
-  idle(() => {
-    try {
-      generateForLevel(level);
-    } catch {
-      // 先読みは失敗しても構わない。実際に開くときに作り直される。
-    }
-  });
 }
 
 export interface NumberState {

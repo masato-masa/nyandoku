@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   catCount,
-  createGame,
+  createGameFrom,
   derive,
   hint,
   mergeLastMoves,
@@ -13,7 +13,8 @@ import {
   type GameState,
   type TapResult,
 } from './core/game';
-import { difficultyBand, peekLevel, prefetchLevel } from './core/puzzle';
+import { difficultyBand } from './core/puzzle';
+import { peekLevel, prefetchLevel, requestLevel } from './core/puzzleClient';
 import { sfx } from './core/sfx';
 import { Board, type PaintMode } from './ui/Board';
 import { Cat, CAT_NORMAL_SRC } from './ui/Cat';
@@ -59,23 +60,6 @@ function initialLevel(): number {
 
 type Sheet = 'none' | 'help' | 'levels';
 
-/**
- * 画面を 1 度描かせてから重い処理に入るための待ち。
- *
- * requestAnimationFrame だけに頼ると、タブが裏にあるときに発火せず
- * 「準備中…」から永久に進まなくなる。必ず動く setTimeout を保険に併走させる。
- */
-function afterPaint(run: () => void): void {
-  let done = false;
-  const once = () => {
-    if (done) return;
-    done = true;
-    run();
-  };
-  requestAnimationFrame(() => requestAnimationFrame(once));
-  setTimeout(once, 120);
-}
-
 export default function App() {
   const [state, setState] = useState<GameState | null>(null);
   const [loading, setLoading] = useState(true);
@@ -97,20 +81,21 @@ export default function App() {
     const start = (game: GameState) => {
       setState(game);
       setLoading(false);
-      // 次のレベルを裏で先に作っておく。「次のレベルへ」を押した瞬間の待ちが消える。
+      // 次のレベルを裏で先に作っておく。1 面解くのに数分かかるので、
+      // その間に作り終わっていれば「次のレベルへ」の待ちは消える。
       prefetchLevel(level + 1);
     };
 
     // すでに作ってあるなら待たせない
-    if (peekLevel(level)) {
-      start(createGame(level));
+    const ready = peekLevel(level);
+    if (ready) {
+      start(createGameFrom(ready));
       return;
     }
 
-    // 生成は同期処理なので、先に 1 フレーム描かせないと
-    // ローディングが一度も表示されないまま固まる。
+    // 生成は別スレッドで走るので、待っている間も画面は動く
     setLoading(true);
-    afterPaint(() => start(createGame(level)));
+    void requestLevel(level).then((puzzle) => start(createGameFrom(puzzle)));
   }, []);
 
   // 最初の 1 面。ここも生成に時間がかかるのでローディングを挟む。
