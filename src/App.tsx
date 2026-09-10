@@ -13,6 +13,7 @@ import {
   type GameState,
   type TapResult,
 } from './core/game';
+import { peekLevel, prefetchLevel } from './core/puzzle';
 import { sfx } from './core/sfx';
 import { Board, type PaintMode } from './ui/Board';
 import { Cat, CAT_NORMAL_SRC } from './ui/Cat';
@@ -50,24 +51,64 @@ function initialLevel(): number {
 
 type Sheet = 'none' | 'help' | 'levels';
 
+/**
+ * 画面を 1 度描かせてから重い処理に入るための待ち。
+ *
+ * requestAnimationFrame だけに頼ると、タブが裏にあるときに発火せず
+ * 「準備中…」から永久に進まなくなる。必ず動く setTimeout を保険に併走させる。
+ */
+function afterPaint(run: () => void): void {
+  let done = false;
+  const once = () => {
+    if (done) return;
+    done = true;
+    run();
+  };
+  requestAnimationFrame(() => requestAnimationFrame(once));
+  setTimeout(once, 120);
+}
+
 export default function App() {
-  const [state, setState] = useState<GameState>(() => createGame(initialLevel()));
+  const [state, setState] = useState<GameState | null>(null);
+  const [loading, setLoading] = useState(true);
   const [maxLevel, setMaxLevel] = useState(() => Math.max(loadMaxLevel(), initialLevel()));
   const [muted, setMuted] = useState(false);
   const [sheet, setSheet] = useState<Sheet>('none');
   const crossStep = useRef(0);
 
-  const derived = useMemo(() => derive(state), [state]);
+  const derived = useMemo(() => (state ? derive(state) : null), [state]);
 
   const goToLevel = useCallback((level: number) => {
-    setState(createGame(level));
+    setSheet('none');
     setMaxLevel((m) => {
       const next = Math.max(m, level);
       if (next !== m) saveMaxLevel(next);
       return next;
     });
-    setSheet('none');
+
+    const start = (game: GameState) => {
+      setState(game);
+      setLoading(false);
+      // 次のレベルを裏で先に作っておく。「次のレベルへ」を押した瞬間の待ちが消える。
+      prefetchLevel(level + 1);
+    };
+
+    // すでに作ってあるなら待たせない
+    if (peekLevel(level)) {
+      start(createGame(level));
+      return;
+    }
+
+    // 生成は同期処理なので、先に 1 フレーム描かせないと
+    // ローディングが一度も表示されないまま固まる。
+    setLoading(true);
+    afterPaint(() => start(createGame(level)));
   }, []);
+
+  // 最初の 1 面。ここも生成に時間がかかるのでローディングを挟む。
+  useEffect(() => {
+    goToLevel(initialLevel());
+  }, [goToLevel]);
 
   /** 状態の更新と、その手に応じた音・触覚をまとめて扱う唯一の入り口。 */
   const apply = useCallback((result: TapResult) => {
@@ -96,6 +137,7 @@ export default function App() {
 
   const handleTap = useCallback(
     (idx: number) => {
+      if (!state) return;
       sfx.unlock();
       crossStep.current = 0;
       apply(tap(state, idx));
@@ -105,13 +147,14 @@ export default function App() {
 
   // ドラッグ中は 1 フレームに複数マス塗られるので、React の再レンダを待たずに
   // 最新の状態を自分で持ち回す。ここを state 経由にすると塗り残しが出る。
-  const live = useRef(state);
+  const live = useRef<GameState | null>(state);
   live.current = state;
 
   const handlePaint = useCallback(
     (idx: number, mode: PaintMode): boolean => {
       sfx.unlock();
       const before = live.current;
+      if (!before) return false;
       const result = paint(before, idx, mode);
       if (result.state === before) return false;
       live.current = result.state;
@@ -122,12 +165,12 @@ export default function App() {
   );
 
   const handlePaintEnd = useCallback((moves: number) => {
-    setState((s) => mergeLastMoves(s, moves));
+    setState((s) => (s ? mergeLastMoves(s, moves) : s));
   }, []);
 
   const doUndo = useCallback(() => {
     setState((s) => {
-      if (s.history.length === 0) return s;
+      if (!s || s.history.length === 0) return s;
       sfx.undo();
       return undo(s);
     });
@@ -135,10 +178,12 @@ export default function App() {
 
   const doReset = useCallback(() => {
     sfx.erase();
-    setState((s) => reset(s));
+    setState((s) => (s ? reset(s) : s));
   }, []);
 
-  const doHint = useCallback(() => apply(hint(state)), [apply, state]);
+  const doHint = useCallback(() => {
+    if (state) apply(hint(state));
+  }, [apply, state]);
 
   const toggleSound = useCallback(() => {
     setMuted((m) => {
@@ -147,6 +192,8 @@ export default function App() {
       return !m;
     });
   }, []);
+
+  if (loading || !state || !derived) return <LoadingScreen />;
 
   // 進み具合は置いた猫の数。正解の匹数が見えるのでヒントにはなる。
   const placed = catCount(state.marks);
@@ -273,6 +320,21 @@ export default function App() {
           </Overlay>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+function LoadingScreen() {
+  return (
+    <div className="app loading">
+      <motion.div
+        className="loading-cat"
+        animate={{ y: [0, -12, 0] }}
+        transition={{ duration: 0.85, repeat: Infinity, ease: 'easeInOut' }}
+      >
+        <Cat mood="idle" className="loading-cat-img" />
+      </motion.div>
+      <p className="loading-text">準備中…</p>
     </div>
   );
 }

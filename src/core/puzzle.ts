@@ -236,7 +236,9 @@ export function countSolutions(n: number, wall: Uint8Array, numbers: Int8Array, 
 // ---- 難易度の測定 ----
 
 export interface Analysis {
-  /** 推測なしで最後まで解けたか。これを満たさない問題は出さない。 */
+  /** 基本推論だけで最後まで解けたか。 */
+  solvedBasic: boolean;
+  /** 基本推論に背理法を足せば解けたか。これを満たさない問題は出さない。 */
   solved: boolean;
   /** 推論の往復回数。確定の連鎖がどれだけ続くか。 */
   rounds: number;
@@ -244,6 +246,8 @@ export interface Analysis {
   byNumber: number;
   /** 視野の被覆から確定したマスの数。人にとってはこちらのほうが重い。 */
   byCover: number;
+  /** 背理法でしか確定できなかったマスの数。ここが 1 以上なら上級者向け。 */
+  byContradiction: number;
   /** 猫を置ける候補マスの数。探索の広さ。 */
   candidates: number;
 }
@@ -252,70 +256,60 @@ const UNKNOWN = 0;
 const IS_CAT = 1;
 const IS_EMPTY = 2;
 
+interface Ctx {
+  n: number;
+  size: number;
+  wall: Uint8Array;
+  numbers: Int8Array;
+  masks: Map<number, Uint8Array>;
+  numberedWalls: number[];
+  wallNbrs: Map<number, number[]>;
+}
+
+interface PropResult {
+  contradiction: boolean;
+  byNumber: number;
+  byCover: number;
+  rounds: number;
+}
+
+function seenFrom(ctx: Ctx, state: Uint8Array): Uint8Array {
+  const s = new Uint8Array(ctx.size);
+  for (let i = 0; i < ctx.size; i++) {
+    if (state[i] !== IS_CAT) continue;
+    const m = ctx.masks.get(i)!;
+    for (let j = 0; j < ctx.size; j++) if (m[j]) s[j] = 1;
+  }
+  return s;
+}
+
 /**
- * 人が使う推論だけを機械的に回して、どこまで確定できるかを測る。
+ * 基本推論だけを行き詰まるまで回す。state は書き換わる。
  *
- * 使う推論は 2 種類だけ:
  *   A 数字  ある壁の数字が k のとき、まわりの猫が k 匹揃えば残りは空。
  *           空きマスを全部使わないと k に届かないなら残りは全部猫。
  *   B 被覆  まだ誰にも見えていないマスを見られる候補が 1 つしかないなら、そこは猫。
- *
- * 「解が一意か」の検査とは別物。一意でも、この推論だけでは詰まる（＝推測が要る）
- * 問題は普通に出てくる。実測では旧設定の 25〜42% がそうだった。
  */
-export function analyse(
-  n: number,
-  wall: Uint8Array,
-  numbers: Int8Array,
-  candidate: Uint8Array,
-): Analysis {
-  const size = n * n;
-
-  const masks = new Map<number, Uint8Array>();
-  for (let i = 0; i < size; i++) if (candidate[i]) masks.set(i, visionOf(n, wall, i));
-
-  const state = new Uint8Array(size);
-  // 猫を置けないマスは最初から空で確定している
-  for (let i = 0; i < size; i++) if (!wall[i] && !candidate[i]) state[i] = IS_EMPTY;
-
-  const numberedWalls: number[] = [];
-  for (let i = 0; i < size; i++) if (wall[i] && numbers[i] >= 0) numberedWalls.push(i);
-  const wallNbrs = new Map<number, number[]>();
-  for (const w of numberedWalls) wallNbrs.set(w, neighbours8(n, w).filter((c) => !wall[c]));
-
-  const currentlySeen = (): Uint8Array => {
-    const s = new Uint8Array(size);
-    for (let i = 0; i < size; i++) {
-      if (state[i] !== IS_CAT) continue;
-      const m = masks.get(i)!;
-      for (let j = 0; j < size; j++) if (m[j]) s[j] = 1;
-    }
-    return s;
-  };
-
+function propagate(ctx: Ctx, state: Uint8Array): PropResult {
   let rounds = 0;
   let byNumber = 0;
   let byCover = 0;
-  let contradiction = false;
 
   for (;;) {
     let changed = false;
     rounds++;
 
-    // A 数字の推論
-    for (const w of numberedWalls) {
-      const want = numbers[w];
-      const cells = wallNbrs.get(w)!;
+    for (const w of ctx.numberedWalls) {
+      const want = ctx.numbers[w];
+      const cells = ctx.wallNbrs.get(w)!;
       let cats = 0;
       const unknown: number[] = [];
       for (const c of cells) {
         if (state[c] === IS_CAT) cats++;
         else if (state[c] === UNKNOWN) unknown.push(c);
       }
-      if (cats > want) {
-        contradiction = true;
-        break;
-      }
+      if (cats > want) return { contradiction: true, byNumber, byCover, rounds };
+      if (cats + unknown.length < want) return { contradiction: true, byNumber, byCover, rounds };
       if (unknown.length === 0) continue;
       if (cats === want) {
         for (const c of unknown) state[c] = IS_EMPTY;
@@ -327,47 +321,121 @@ export function analyse(
         changed = true;
       }
     }
-    if (contradiction) break;
 
-    // B 被覆の推論
-    const seen = currentlySeen();
-    for (let c = 0; c < size; c++) {
-      if (wall[c] || seen[c]) continue;
+    const seen = seenFrom(ctx, state);
+    for (let c = 0; c < ctx.size; c++) {
+      if (ctx.wall[c] || seen[c]) continue;
       let only = -1;
       let count = 0;
-      for (const [x, m] of masks) {
+      for (const [x, m] of ctx.masks) {
         if (state[x] === IS_EMPTY || !m[c]) continue;
         count++;
         only = x;
         if (count > 1) break;
       }
-      if (count === 0) {
-        contradiction = true;
-        break;
-      }
+      if (count === 0) return { contradiction: true, byNumber, byCover, rounds };
       if (count === 1 && state[only] === UNKNOWN) {
         state[only] = IS_CAT;
         byCover++;
         changed = true;
       }
     }
-    if (contradiction) break;
 
-    if (!changed) break;
-    // 念のための安全弁。通常ここには達しない。
-    if (rounds > 200) break;
+    if (!changed) return { contradiction: false, byNumber, byCover, rounds };
+    if (rounds > 200) return { contradiction: false, byNumber, byCover, rounds };
+  }
+}
+
+function isSolved(ctx: Ctx, state: Uint8Array): boolean {
+  const numbersOk = ctx.numberedWalls.every(
+    (w) => ctx.wallNbrs.get(w)!.filter((c) => state[c] === IS_CAT).length === ctx.numbers[w],
+  );
+  return numbersOk && allCovered(ctx.n, ctx.wall, seenFrom(ctx, state));
+}
+
+/**
+ * 人が使う推論を機械的に回して、どこまで確定できるかを測る。
+ *
+ * まず基本推論（数字と被覆）だけで回し、詰まったら背理法に降りる。
+ * 背理法は「あるマスを猫だと仮定して基本推論を回し、矛盾したら猫ではない」という
+ * 1 手だけの仮定。人がやる「ここに置くと後で破綻するから置けない」に相当する。
+ *
+ * 「解が一意か」の検査とは別物。一意でも基本推論だけでは詰まる問題は普通にある。
+ */
+export function analyse(
+  n: number,
+  wall: Uint8Array,
+  numbers: Int8Array,
+  candidate: Uint8Array,
+): Analysis {
+  const size = n * n;
+  const masks = new Map<number, Uint8Array>();
+  for (let i = 0; i < size; i++) if (candidate[i]) masks.set(i, visionOf(n, wall, i));
+
+  const numberedWalls: number[] = [];
+  for (let i = 0; i < size; i++) if (wall[i] && numbers[i] >= 0) numberedWalls.push(i);
+  const wallNbrs = new Map<number, number[]>();
+  for (const w of numberedWalls) wallNbrs.set(w, neighbours8(n, w).filter((c) => !wall[c]));
+
+  const ctx: Ctx = { n, size, wall, numbers, masks, numberedWalls, wallNbrs };
+
+  const state = new Uint8Array(size);
+  // 猫を置けないマスは最初から空で確定している
+  for (let i = 0; i < size; i++) if (!wall[i] && !candidate[i]) state[i] = IS_EMPTY;
+
+  let rounds = 0;
+  let byNumber = 0;
+  let byCover = 0;
+  let byContradiction = 0;
+  let solvedBasic = false;
+  let broken = false;
+  let first = true;
+
+  for (;;) {
+    const r = propagate(ctx, state);
+    rounds += r.rounds;
+    byNumber += r.byNumber;
+    byCover += r.byCover;
+    if (r.contradiction) {
+      broken = true;
+      break;
+    }
+
+    const done = isSolved(ctx, state);
+    if (first) {
+      solvedBasic = done;
+      first = false;
+    }
+    if (done) break;
+
+    // 基本推論で詰まった。1 手だけ仮定して矛盾を探す。
+    let progressed = false;
+    for (const [x] of masks) {
+      if (state[x] !== UNKNOWN) continue;
+      for (const guess of [IS_CAT, IS_EMPTY] as const) {
+        const trial = state.slice();
+        trial[x] = guess;
+        if (propagate(ctx, trial).contradiction) {
+          state[x] = guess === IS_CAT ? IS_EMPTY : IS_CAT;
+          byContradiction++;
+          progressed = true;
+          break;
+        }
+      }
+      if (progressed) break;
+    }
+    if (!progressed) break; // 背理法でも進まない。ここで詰み。
   }
 
-  const seen = currentlySeen();
-  const numbersOk = numberedWalls.every(
-    (w) => wallNbrs.get(w)!.filter((c) => state[c] === IS_CAT).length === numbers[w],
-  );
+  const solved = !broken && isSolved(ctx, state);
 
   return {
-    solved: !contradiction && numbersOk && allCovered(n, wall, seen),
+    solvedBasic: solvedBasic && solved,
+    solved,
     rounds,
     byNumber,
     byCover,
+    byContradiction,
     candidates: masks.size,
   };
 }
@@ -388,23 +456,30 @@ export const DIFFICULTY_WEIGHTS = {
   candidates: 0.6,
   byCover: 6,
   rounds: 4,
+  /** 背理法は一段違う難しさなので大きく効かせる。1 回入るだけで別物になる。 */
+  byContradiction: 14,
 } as const;
 
 export function difficultyOf(a: Analysis): number {
   return (
     a.candidates * DIFFICULTY_WEIGHTS.candidates +
     a.byCover * DIFFICULTY_WEIGHTS.byCover +
-    a.rounds * DIFFICULTY_WEIGHTS.rounds
+    a.rounds * DIFFICULTY_WEIGHTS.rounds +
+    a.byContradiction * DIFFICULTY_WEIGHTS.byContradiction
   );
 }
 
 /**
  * レベルに対する目標難易度。
- * 上がり続けるのではなく上限に漸近させ、さらに揺らぎを持たせている。
- * 「レベルが高いほど難しい傾向はあるが、必ずそうとは限らない」という形。
+ *
+ * 曲線はレベル 15 が 50 前後になるよう合わせてある。実際に遊んで
+ * 「レベル15 くらいがちょうどいい」という感触が得られた点を基準にした。
+ * そこから上は背理法つきの問題（1 回で +14）に手が届く高さまで伸ばす。
+ * 上限に漸近させ、さらに揺らぎを持たせて「高いほど難しい傾向はあるが
+ * 必ずそうとは限らない」形にしている。
  */
 export function targetDifficulty(level: number, rng: () => number): number {
-  const base = 18 + 34 * (1 - Math.exp(-(level - 1) / 9));
+  const base = 18 + 55 * (1 - Math.exp(-(level - 1) / 16));
   const jitter = 1 + (rng() * 2 - 1) * 0.2;
   return base * jitter;
 }
@@ -535,6 +610,17 @@ const KNOB_ATTEMPTS = 18;
 const BOARD_ATTEMPTS = 260;
 
 /**
+ * 一度作った盤面は覚えておく。生成は決定的なので、作り直しても同じものしか
+ * 出てこない。同じレベルを開き直すたびに数百ミリ秒待たされるのは無駄。
+ */
+const cache = new Map<number, Puzzle>();
+
+/** すでに作ってあるならそれを返す。無ければ null（生成はしない）。 */
+export function peekLevel(level: number): Puzzle | null {
+  return cache.get(level) ?? null;
+}
+
+/**
  * レベルから盤面を作る。同じレベルなら必ず同じ盤面になる。
  *
  * サイズをレベルから直接決めるのはやめ、複数の軸で作った候補に難易度の点数を
@@ -542,6 +628,9 @@ const BOARD_ATTEMPTS = 260;
  * 小さい盤面が出るし、レベルと難しさは「傾向として」しか結び付かない。
  */
 export function generateForLevel(level: number): Puzzle {
+  const cached = cache.get(level);
+  if (cached) return cached;
+
   const rng = mulberry32(level * 7919 + 104729);
   const target = targetDifficulty(level, rng);
 
@@ -571,7 +660,7 @@ export function generateForLevel(level: number): Puzzle {
     best = { raw, knobs, analysis, score: difficultyOf(analysis) };
   }
 
-  return {
+  const puzzle: Puzzle = {
     n: best.raw.n,
     level,
     wall: best.raw.wall,
@@ -582,6 +671,29 @@ export function generateForLevel(level: number): Puzzle {
     difficulty: best.score,
     analysis: best.analysis,
   };
+  cache.set(level, puzzle);
+  return puzzle;
+}
+
+/**
+ * 次に遊ぶであろうレベルを、手が空いているときに先に作っておく。
+ * 「次のレベルへ」を押した瞬間の待ちを消すためのもの。
+ */
+export function prefetchLevel(level: number): void {
+  if (cache.has(level)) return;
+  const idle = (cb: () => void) => {
+    const ric = (globalThis as { requestIdleCallback?: (cb: () => void) => void })
+      .requestIdleCallback;
+    if (ric) ric(cb);
+    else setTimeout(cb, 200);
+  };
+  idle(() => {
+    try {
+      generateForLevel(level);
+    } catch {
+      // 先読みは失敗しても構わない。実際に開くときに作り直される。
+    }
+  });
 }
 
 export interface NumberState {

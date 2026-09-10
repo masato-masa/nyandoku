@@ -506,3 +506,45 @@ body {
     padding: 22px 20px 18px;
   }
 }
+
+/* ---- 生成待ちの表示 ---- */
+/* 盤面の生成は同期処理で、難しい面ほど時間がかかる（最悪で 1 秒近く）。
+   何も出さないと固まったように見えるので、必ずここを挟む。 */
+.app.loading {
+  justify-content: center;
+  gap: 14px;
+  /* 速く終わった生成では出さない。数十ミリ秒の「準備中…」が一瞬光るほうが、
+     何も出ないより目障りなため、120ms 遅れて浮かび上がらせる。 */
+  opacity: 0;
+  animation: loading-in 0.2s var(--ease) 0.12s both;
+}
+
+@keyframes loading-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.loading-cat {
+  width: 84px;
+  height: 84px;
+  display: grid;
+  place-items: center;
+}
+
+.loading-cat-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.loading-text {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--pill-fg);
+}
