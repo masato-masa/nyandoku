@@ -116,7 +116,20 @@ function wallAdjacentCells(n: number, wall: Uint8Array): number[] {
   return out;
 }
 
-/** 全マスを覆う猫の集合を貪欲に探す。視野は事前計算したものを使い回す。 */
+/**
+ * 全マスを覆う猫の集合を探す。視野は事前計算したものを使い回す。
+ *
+ * 猫の選び方が、そのまま壁の数字の分布になる。
+ * 「最も多く新しく照らす猫」を選び続けると視野の重複を避けようとして猫が
+ * 散らばり、同じ壁の周りに 2 匹以上が並ばなくなる。その結果、数字が 0 と 1
+ * ばかりになって手がかりが単調になる。実測（8x8・50 盤面の数字の分布）:
+ *
+ *   最大利得を選ぶ  0:231  1:471  2:155  3:12  4:0   （猫 7.8 匹）
+ *   候補から無作為  0:159  1:436  2:300  3:78  4:6   （猫 10.6 匹）
+ *
+ * そこで「1 マス以上新しく照らす候補」から無作為に選ぶ。猫は増えるが、
+ * 数字の種類が広がって推理の手がかりが増える。
+ */
 function findCover(
   n: number,
   wall: Uint8Array,
@@ -131,23 +144,20 @@ function findCover(
   for (let step = 0; step < cells.length; step++) {
     if (allCovered(n, wall, seen)) return cats;
 
-    let best: number[] = [];
-    let bestGain = 0;
+    const usable: number[] = [];
     for (const cand of cells) {
       if (used.has(cand)) continue;
       const m = masks.get(cand)!;
-      let gain = 0;
-      for (let i = 0; i < m.length; i++) if (m[i] && !seen[i] && !wall[i]) gain++;
-      if (gain > bestGain) {
-        bestGain = gain;
-        best = [cand];
-      } else if (gain === bestGain && gain > 0) {
-        best.push(cand);
+      for (let i = 0; i < m.length; i++) {
+        if (m[i] && !seen[i] && !wall[i]) {
+          usable.push(cand);
+          break;
+        }
       }
     }
-    if (bestGain === 0) return null;
+    if (usable.length === 0) return null;
 
-    const pick = best[Math.floor(rng() * best.length)];
+    const pick = usable[Math.floor(rng() * usable.length)];
     cats.push(pick);
     used.add(pick);
     const m = masks.get(pick)!;
@@ -214,17 +224,25 @@ export function countSolutions(n: number, wall: Uint8Array, numbers: Int8Array, 
 /**
  * 壁になるマスの割合。盤面が大きいほど上げる。
  * 壁が少ないと候補マスが増えて一意解に届かず、生成が急激に遅くなる。
- * 実測（数字の割合 0.6）:
- *   8x8 密度0.33 → 中央104ms・最悪444ms / 密度0.43 → 中央34ms・最悪195ms
  */
 function wallDensity(n: number): number {
   if (n <= 6) return 0.33;
-  if (n === 7) return 0.37;
+  if (n === 7) return 0.4;
   return 0.43;
 }
 
-/** 壁のうち数字を書く割合。全部に書くと生成は速いが、見た目がうるさい。 */
-const NUMBER_RATIO = 0.6;
+/**
+ * 壁のうち数字を書く割合。
+ *
+ * 見た目のためには少ないほうがよいが、数字は制約でもあるので、減らすと
+ * 一意解の探索が枝刈りされず生成が跳ね上がる。密度より遥かに効く。
+ * 実測（8x8・猫は無作為選択）:
+ *   数字 60% → 中央 66ms・最悪 1045ms
+ *   数字 80% → 中央  2ms・最悪   25ms  （数字の分布はほぼ同じ）
+ * 一意にならなければ数字を足していく修復方式も試したが、最悪 556ms で
+ * この単純な設定に負けたため採用していない。
+ */
+const NUMBER_RATIO = 0.8;
 
 /** 解が一意になるまで作り直す。同じ seed なら必ず同じ問題が出る。 */
 export function generatePuzzle(n: number, seed: number): Puzzle {
