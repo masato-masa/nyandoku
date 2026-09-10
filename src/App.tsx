@@ -16,7 +16,7 @@ import {
 import { sfx } from './core/sfx';
 import { Board, type PaintMode } from './ui/Board';
 import { Cat, CAT_NORMAL_SRC } from './ui/Cat';
-import { HelpIcon, HintIcon, LevelsIcon, ResetIcon, SettingsIcon, UndoIcon } from './ui/icons';
+import { HelpIcon, HintIcon, LevelsIcon, ResetIcon, SoundIcon, UndoIcon } from './ui/icons';
 
 const STORAGE_KEY = 'nyandoku.maxLevel';
 
@@ -190,42 +190,44 @@ export default function App() {
             onClick={toggleSound}
             aria-label={muted ? '音を出す' : '音を消す'}
           >
-            <SettingsIcon />
+            <SoundIcon muted={muted} />
           </button>
         </div>
       </header>
 
-      <Board
-        state={state}
-        derived={derived}
-        onTap={handleTap}
-        onPaint={handlePaint}
-        onPaintEnd={handlePaintEnd}
-      />
+      <main className="play">
+        <Board
+          state={state}
+          derived={derived}
+          onTap={handleTap}
+          onPaint={handlePaint}
+          onPaintEnd={handlePaintEnd}
+        />
 
-      <footer className="footer">
-        <button
-          className="tool"
-          type="button"
-          onClick={doUndo}
-          disabled={state.history.length === 0 || state.status !== 'playing'}
-          aria-label="ひとつ戻す"
-        >
-          <UndoIcon />
-        </button>
-        <button className="tool" type="button" onClick={doReset} aria-label="やり直す">
-          <ResetIcon />
-        </button>
-        <button
-          className="tool"
-          type="button"
-          onClick={doHint}
-          disabled={state.status !== 'playing'}
-          aria-label="ヒント"
-        >
-          <HintIcon />
-        </button>
-      </footer>
+        <footer className="footer">
+          <button
+            className="tool"
+            type="button"
+            onClick={doUndo}
+            disabled={state.history.length === 0 || state.status !== 'playing'}
+            aria-label="ひとつ戻す"
+          >
+            <UndoIcon />
+          </button>
+          <button className="tool" type="button" onClick={doReset} aria-label="やり直す">
+            <ResetIcon />
+          </button>
+          <button
+            className="tool"
+            type="button"
+            onClick={doHint}
+            disabled={state.status !== 'playing'}
+            aria-label="ヒント"
+          >
+            <HintIcon />
+          </button>
+        </footer>
+      </main>
 
       <AnimatePresence>
         {sheet === 'help' && <HelpSheet onClose={() => setSheet('none')} />}
