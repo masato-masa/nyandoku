@@ -1,25 +1,51 @@
-// Star Battle / Queens 系ロジックパズルの生成器とソルバ。
+// 猫の視野パズルの生成器とソルバ。
 //
 // ルール:
-//   - 各行・各列・各カラー領域に、猫はちょうど 1 匹
-//   - 猫どうしは斜めを含めて隣接してはいけない
+//   - 盤面の一部が壁。壁の一部には数字が書いてある
+//   - 数字は、その壁の隣接 8 マスにいる猫の数（ちょうど）
+//   - 猫は、数字付きの壁の隣接 8 マスにのみ置ける
+//   - 猫の視野 = 自分のマス + 隣接 8 マス + 上下左右の直線（壁で停止）
+//   - 壁以外の全マスが誰かの視野に入ったらクリア
 //
-// DOM に一切触れない純粋ロジック。ゲームの中身を差し替えるときは
-// ここだけを置き換えれば、UI 層と操作感はそのまま再利用できる。
+// 遊び方の説明では「猫も視野を遮る」としているが、見えるマスの集合は遮っても
+// 変わらない。遮った猫が必ず同じ方向へ視野を出し直すので、和集合が一致する。
+// よって計算では猫による遮蔽を無視でき、各マスの視野を盤面ごとに 1 度だけ
+// 求めて使い回せる。ここを毎回数え直すと生成が桁違いに遅くなる。
 
 export interface Puzzle {
   readonly n: number;
   readonly seed: number;
-  /** regions[row * n + col] = 領域 ID (0..n-1) */
-  readonly regions: Int32Array;
-  /** solution[row] = 猫が入る列 */
+  /** 1 = 壁 */
+  readonly wall: Uint8Array;
+  /** -1 = 数字なし、0 以上 = 隣接 8 マスの猫の数 */
+  readonly numbers: Int8Array;
+  /** 1 = 猫を置けるマス（数字付きの壁の隣） */
+  readonly candidate: Uint8Array;
+  /** 正解の猫の位置 */
   readonly solution: number[];
 }
 
-/** 決定的な擬似乱数。同じ seed からは必ず同じ盤面が出る。 */
+const N8: ReadonlyArray<readonly [number, number]> = [
+  [-1, -1],
+  [-1, 0],
+  [-1, 1],
+  [0, -1],
+  [0, 1],
+  [1, -1],
+  [1, 0],
+  [1, 1],
+];
+
+const N4: ReadonlyArray<readonly [number, number]> = [
+  [-1, 0],
+  [1, 0],
+  [0, -1],
+  [0, 1],
+];
+
 export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
-  return function rng() {
+  return () => {
     a = (a + 0x6d2b79f5) >>> 0;
     let t = a;
     t = Math.imul(t ^ (t >>> 15), t | 1);
@@ -28,187 +54,258 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
-function shuffled<T>(items: T[], rng: () => number): T[] {
-  const out = items.slice();
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
+const inside = (n: number, r: number, c: number) => r >= 0 && r < n && c >= 0 && c < n;
+
+export function neighbours8(n: number, cell: number): number[] {
+  const r = Math.floor(cell / n);
+  const c = cell % n;
+  const out: number[] = [];
+  for (const [dr, dc] of N8) {
+    if (inside(n, r + dr, c + dc)) out.push((r + dr) * n + (c + dc));
   }
   return out;
 }
 
-/**
- * 解を 1 つランダムに作る。行ごとに列を選ぶので行の重複は起きない。
- * 列の重複と、隣り合う行での斜め隣接だけを弾けばよい。
- */
-function randomSolution(n: number, rng: () => number): number[] | null {
-  const place = new Array<number>(n).fill(-1);
-  const colUsed = new Array<boolean>(n).fill(false);
+/** そのマスに猫を置いたとき見えるマス。壁は含めない。 */
+export function visionOf(n: number, wall: Uint8Array, cell: number): Uint8Array {
+  const seen = new Uint8Array(n * n);
+  const r = Math.floor(cell / n);
+  const c = cell % n;
+  seen[cell] = 1;
 
-  const rec = (row: number): boolean => {
-    if (row === n) return true;
-    for (const col of shuffled([...Array(n).keys()], rng)) {
-      if (colUsed[col]) continue;
-      if (row > 0 && Math.abs(place[row - 1] - col) <= 1) continue;
-      place[row] = col;
-      colUsed[col] = true;
-      if (rec(row + 1)) return true;
-      colUsed[col] = false;
-      place[row] = -1;
-    }
-    return false;
-  };
-
-  return rec(0) ? place : null;
-}
-
-/**
- * 各猫を種にした多点フラッドフィルで領域を育てる。
- *
- * 肝は「1 つの領域を数マス続けて伸ばしてから別の領域へ移る」ところ。
- * 面積を揃えて丸く育てると領域が解を絞れず、一意解がほとんど出ない
- * （実測: 6x6 以上で 0%、生成器が延々と引き直して固まる）。
- * 細長く育てると制約が強くなり、9x9 でも数ミリ秒で一意解に届く。
- */
-function growRegions(n: number, solution: number[], rng: () => number): Int32Array | null {
-  const size = n * n;
-  const owner = new Int32Array(size).fill(-1);
-  const counts = new Array<number>(n).fill(0);
-  const frontier: number[][] = Array.from({ length: n }, () => []);
-
-  const pushNeighbours = (idx: number) => {
-    const region = owner[idx];
-    const r = Math.floor(idx / n);
-    const c = idx % n;
-    if (r > 0) frontier[region].push(idx - n);
-    if (r < n - 1) frontier[region].push(idx + n);
-    if (c > 0) frontier[region].push(idx - 1);
-    if (c < n - 1) frontier[region].push(idx + 1);
-  };
-
-  for (let r = 0; r < n; r++) {
-    const idx = r * n + solution[r];
-    owner[idx] = r;
-    counts[r] = 1;
-    pushNeighbours(idx);
+  for (const [dr, dc] of N8) {
+    const rr = r + dr;
+    const cc = c + dc;
+    if (inside(n, rr, cc) && !wall[rr * n + cc]) seen[rr * n + cc] = 1;
   }
 
-  // 1 つの領域を続けて伸ばす長さ。盤が大きいほど長く伸ばさないと制約が足りず、
-  // 一意解に届くまでの試行回数が跳ね上がる（9x9 で実測 257ms → 数 ms）。
-  const minRun = 3;
-  const maxRun = Math.max(8, n + 3);
-
-  // 1 領域が広がりすぎると見た目が単調になり、そこだけ難易度も落ちる。
-  // 面積を揃えにいくと逆に一意解がほぼ出なくなるので、上限だけ押さえる。
-  // （8x8 で最大領域 28 マス → 20 マス）
-  const maxSize = Math.ceil(n * 1.8);
-
-  // 1 マスだけの領域は猫の位置がただで分かってしまうので必ず 2 マス以上にする。
-  // 3 マス以上を強制すると一意解がほとんど出なくなる（8x8 で生成失敗が頻発）。
-  // ここが「解が一意であること」と「見た目の均等さ」の折り合う限界だった。
-  const minSize = 2;
-
-  let assigned = n;
-  let current = -1;
-  let run = 0;
-
-  while (assigned < size) {
-    const live: number[] = [];
-    for (let g = 0; g < n; g++) {
-      frontier[g] = frontier[g].filter((i) => owner[i] === -1);
-      if (frontier[g].length > 0) live.push(g);
+  for (const [dr, dc] of N4) {
+    let rr = r + dr;
+    let cc = c + dc;
+    while (inside(n, rr, cc) && !wall[rr * n + cc]) {
+      seen[rr * n + cc] = 1;
+      rr += dr;
+      cc += dc;
     }
-    if (live.length === 0) return null; // 届かないセルが出た。作り直し。
+  }
+  return seen;
+}
 
-    // 最小サイズに届いていない領域があれば、囲まれて潰れる前にそこを伸ばす。
-    const starving = live.filter((g) => counts[g] < minSize);
-    let region: number;
+/** 猫たちが見ているマス。 */
+export function coverageOf(n: number, wall: Uint8Array, cats: Iterable<number>): Uint8Array {
+  const seen = new Uint8Array(n * n);
+  for (const cat of cats) {
+    const v = visionOf(n, wall, cat);
+    for (let i = 0; i < seen.length; i++) if (v[i]) seen[i] = 1;
+  }
+  return seen;
+}
 
-    if (starving.length > 0) {
-      region = starving[Math.floor(rng() * starving.length)];
-      current = -1;
-      run = 0;
-    } else {
-      // 上限に達していない領域を優先する。全部埋まっていたら仕方なく全体から選ぶ。
-      const room = live.filter((g) => counts[g] < maxSize);
-      const pool = room.length > 0 ? room : live;
+export function allCovered(n: number, wall: Uint8Array, seen: Uint8Array): boolean {
+  for (let i = 0; i < n * n; i++) if (!wall[i] && !seen[i]) return false;
+  return true;
+}
 
-      // 伸ばす回数を使い切ったか、伸ばしていた領域が行き止まりになったら乗り換える
-      if (run <= 0 || !pool.includes(current)) {
-        current = pool[Math.floor(rng() * pool.length)];
-        run = minRun + Math.floor(rng() * (maxRun - minRun + 1));
+/** 壁に隣接する非壁マス。猫が置ける可能性のある場所。 */
+function wallAdjacentCells(n: number, wall: Uint8Array): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < n * n; i++) {
+    if (wall[i]) continue;
+    if (neighbours8(n, i).some((j) => wall[j])) out.push(i);
+  }
+  return out;
+}
+
+/** 全マスを覆う猫の集合を貪欲に探す。視野は事前計算したものを使い回す。 */
+function findCover(
+  n: number,
+  wall: Uint8Array,
+  cells: number[],
+  masks: Map<number, Uint8Array>,
+  rng: () => number,
+): number[] | null {
+  const cats: number[] = [];
+  const seen = new Uint8Array(n * n);
+  const used = new Set<number>();
+
+  for (let step = 0; step < cells.length; step++) {
+    if (allCovered(n, wall, seen)) return cats;
+
+    let best: number[] = [];
+    let bestGain = 0;
+    for (const cand of cells) {
+      if (used.has(cand)) continue;
+      const m = masks.get(cand)!;
+      let gain = 0;
+      for (let i = 0; i < m.length; i++) if (m[i] && !seen[i] && !wall[i]) gain++;
+      if (gain > bestGain) {
+        bestGain = gain;
+        best = [cand];
+      } else if (gain === bestGain && gain > 0) {
+        best.push(cand);
       }
-      run--;
-      region = current;
     }
+    if (bestGain === 0) return null;
 
-    const list = frontier[region];
-    const pick = Math.floor(rng() * list.length);
-    const idx = list[pick];
-    list.splice(pick, 1);
-
-    owner[idx] = region;
-    counts[region]++;
-    assigned++;
-    pushNeighbours(idx);
+    const pick = best[Math.floor(rng() * best.length)];
+    cats.push(pick);
+    used.add(pick);
+    const m = masks.get(pick)!;
+    for (let i = 0; i < seen.length; i++) if (m[i]) seen[i] = 1;
   }
 
-  return owner;
+  return allCovered(n, wall, seen) ? cats : null;
 }
 
-/**
- * 解の個数を数える。limit に達したら打ち切るので「一意かどうか」の判定が速い。
- * 行を上から順に埋めるため、隣接判定は 1 つ上の行とだけ比べればよい。
- */
-export function countSolutions(n: number, regions: Int32Array, limit = 2): number {
-  const colUsed = new Array<boolean>(n).fill(false);
-  const regionUsed = new Array<boolean>(n).fill(false);
-  const place = new Array<number>(n).fill(-1);
+/** ルールを満たす配置が何通りあるか。limit に達したら打ち切る。 */
+export function countSolutions(n: number, wall: Uint8Array, numbers: Int8Array, limit = 2): number {
+  const walls: number[] = [];
+  for (let i = 0; i < n * n; i++) if (wall[i] && numbers[i] >= 0) walls.push(i);
+
+  // 周りの空きマスが少ない壁から決めると、枝が早く枯れる
+  const around = walls.map((w) => neighbours8(n, w).filter((c) => !wall[c]));
+  const order = walls.map((_, i) => i).sort((a, b) => around[a].length - around[b].length);
+
+  const state = new Map<number, boolean>();
   let found = 0;
 
-  const rec = (row: number): void => {
+  const finish = () => {
+    const cats: number[] = [];
+    for (const [cell, on] of state) if (on) cats.push(cell);
+    if (allCovered(n, wall, coverageOf(n, wall, cats))) found++;
+  };
+
+  const rec = (k: number): void => {
     if (found >= limit) return;
-    if (row === n) {
-      found++;
+    if (k === order.length) {
+      finish();
       return;
     }
-    for (let col = 0; col < n; col++) {
-      if (colUsed[col]) continue;
-      const g = regions[row * n + col];
-      if (regionUsed[g]) continue;
-      if (row > 0 && Math.abs(place[row - 1] - col) <= 1) continue;
 
-      colUsed[col] = true;
-      regionUsed[g] = true;
-      place[row] = col;
-      rec(row + 1);
-      colUsed[col] = false;
-      regionUsed[g] = false;
-      place[row] = -1;
+    const w = order[k];
+    const want = numbers[walls[w]];
+    const cells = around[w];
+    const fixed = cells.filter((c) => state.get(c) === true).length;
+    const open = cells.filter((c) => state.get(c) === undefined);
+    const need = want - fixed;
+    if (need < 0 || need > open.length) return;
 
+    const choose = (start: number, picked: number[]): void => {
       if (found >= limit) return;
-    }
+      if (picked.length === need) {
+        for (const c of open) state.set(c, picked.includes(c));
+        rec(k + 1);
+        for (const c of open) state.delete(c);
+        return;
+      }
+      for (let i = start; i < open.length; i++) {
+        if (open.length - i < need - picked.length) break;
+        choose(i + 1, [...picked, open[i]]);
+        if (found >= limit) return;
+      }
+    };
+    choose(0, []);
   };
 
   rec(0);
   return found;
 }
 
+/**
+ * 壁になるマスの割合。盤面が大きいほど上げる。
+ * 壁が少ないと候補マスが増えて一意解に届かず、生成が急激に遅くなる。
+ * 実測（数字の割合 0.6）:
+ *   8x8 密度0.33 → 中央104ms・最悪444ms / 密度0.43 → 中央34ms・最悪195ms
+ */
+function wallDensity(n: number): number {
+  if (n <= 6) return 0.33;
+  if (n === 7) return 0.37;
+  return 0.43;
+}
+
+/** 壁のうち数字を書く割合。全部に書くと生成は速いが、見た目がうるさい。 */
+const NUMBER_RATIO = 0.6;
+
 /** 解が一意になるまで作り直す。同じ seed なら必ず同じ問題が出る。 */
 export function generatePuzzle(n: number, seed: number): Puzzle {
   const rng = mulberry32(seed);
 
-  for (let attempt = 0; attempt < 4000; attempt++) {
-    const solution = randomSolution(n, rng);
-    if (!solution) continue;
+  const density = wallDensity(n);
 
-    // 同じ解に対して領域だけを何度か引き直す。解の生成より安いので先に試す。
-    for (let retry = 0; retry < 12; retry++) {
-      const regions = growRegions(n, solution, rng);
-      if (!regions) continue;
-      if (countSolutions(n, regions, 2) === 1) return { n, seed, regions, solution };
+  for (let attempt = 0; attempt < 8000; attempt++) {
+    const wall = new Uint8Array(n * n);
+    for (let i = 0; i < n * n; i++) if (rng() < density) wall[i] = 1;
+
+    const cells = wallAdjacentCells(n, wall);
+    if (cells.length === 0) continue;
+
+    const masks = new Map<number, Uint8Array>();
+    for (const cell of cells) masks.set(cell, visionOf(n, wall, cell));
+
+    const cats = findCover(n, wall, cells, masks, rng);
+    if (!cats || cats.length === 0) continue;
+
+    // まず、どの猫も数字付きの壁の隣に来るように最低限の壁を選ぶ
+    const numbers = new Int8Array(n * n).fill(-1);
+    const catSet = new Set(cats);
+    let placeable = true;
+
+    for (const cat of cats) {
+      const nearWalls = neighbours8(n, cat).filter((i) => wall[i]);
+      if (nearWalls.length === 0) {
+        placeable = false;
+        break;
+      }
+      if (nearWalls.some((w) => numbers[w] >= 0)) continue;
+      numbers[nearWalls[Math.floor(rng() * nearWalls.length)]] = 0;
     }
+    if (!placeable) continue;
+
+    // そのうえで、指定の割合になるまで数字付きの壁を足す
+    const allWalls: number[] = [];
+    for (let i = 0; i < n * n; i++) if (wall[i]) allWalls.push(i);
+    const want = Math.round(allWalls.length * NUMBER_RATIO);
+    let numbered = allWalls.filter((w) => numbers[w] >= 0).length;
+    for (const w of allWalls) {
+      if (numbered >= want) break;
+      if (numbers[w] >= 0) continue;
+      numbers[w] = 0;
+      numbered++;
+    }
+
+    // 数字の値は正解から決まる
+    for (let i = 0; i < n * n; i++) {
+      if (numbers[i] < 0) continue;
+      numbers[i] = neighbours8(n, i).filter((c) => catSet.has(c)).length;
+    }
+
+    // 猫を置けるマス = 数字付きの壁の隣にある非壁マス
+    const candidate = new Uint8Array(n * n);
+    for (let i = 0; i < n * n; i++) {
+      if (wall[i]) continue;
+      if (neighbours8(n, i).some((w) => wall[w] && numbers[w] >= 0)) candidate[i] = 1;
+    }
+
+    if (countSolutions(n, wall, numbers, 2) !== 1) continue;
+
+    return { n, seed, wall, numbers, candidate, solution: cats };
   }
 
   throw new Error(`一意な解を持つ ${n}x${n} の盤面を生成できませんでした (seed=${seed})`);
+}
+
+export interface NumberState {
+  want: number;
+  got: number;
+}
+
+/** 数字ごとの充足状況。UI が表示にそのまま使う。 */
+export function numberStates(puzzle: Puzzle, cats: Set<number>): Map<number, NumberState> {
+  const out = new Map<number, NumberState>();
+  for (let i = 0; i < puzzle.n * puzzle.n; i++) {
+    if (puzzle.numbers[i] < 0) continue;
+    const got = neighbours8(puzzle.n, i).filter((c) => cats.has(c)).length;
+    out.set(i, { want: puzzle.numbers[i], got });
+  }
+  return out;
 }

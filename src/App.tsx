@@ -1,13 +1,12 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  catsPlaced,
   createGame,
+  derive,
   hint,
   mergeLastMoves,
   paint,
   reset,
-  sizeForLevel,
   tap,
   undo,
   type GameState,
@@ -19,9 +18,9 @@ import { Cat, CAT_NORMAL_SRC } from './ui/Cat';
 import { HelpIcon, HintIcon, ResetIcon, SettingsIcon, UndoIcon } from './ui/icons';
 
 const RULES = [
-  '1 cat in each color region',
-  '1 cat in every row and column',
-  'Cats can’t touch, even diagonally',
+  'Numbers count cats in the 8 cells around',
+  'Cats sit only beside a numbered wall',
+  'Every open cell must be seen',
 ];
 
 /** ?level=12 のように指定すると、その面から始められる。動作確認用。 */
@@ -36,13 +35,15 @@ export default function App() {
   const [muted, setMuted] = useState(false);
   const crossStep = useRef(0);
 
+  const derived = useMemo(() => derive(state), [state]);
+
   /** 状態の更新と、その手に応じた音・触覚をまとめて扱う唯一の入り口。 */
   const apply = useCallback((result: TapResult) => {
     setState(result.state);
 
     switch (result.effect) {
       case 'cat':
-        sfx.cat(catsPlaced(result.state.marks) - 1);
+        sfx.cat(Math.max(0, result.state.history.length - 1));
         break;
       case 'cross':
         sfx.cross(crossStep.current++);
@@ -50,15 +51,11 @@ export default function App() {
       case 'erase':
         sfx.erase();
         break;
-      case 'conflict':
+      case 'reject':
         sfx.conflict();
         break;
       case 'win':
-        sfx.cat(result.state.puzzle.n - 1);
-        window.setTimeout(() => sfx.win(), 180);
-        break;
-      case 'lose':
-        sfx.lose();
+        window.setTimeout(() => sfx.win(), 140);
         break;
       default:
         break;
@@ -111,7 +108,6 @@ export default function App() {
 
   const doHint = useCallback(() => apply(hint(state)), [apply, state]);
   const nextLevel = useCallback(() => setState((s) => createGame(s.level + 1)), []);
-  const retry = useCallback(() => setState((s) => reset(s)), []);
 
   const toggleSound = useCallback(() => {
     setMuted((m) => {
@@ -121,8 +117,13 @@ export default function App() {
     });
   }, []);
 
-  const placed = catsPlaced(state.marks);
-  const size = sizeForLevel(state.level);
+  // 進み具合は「見えたマス / 開いているマス」。猫の数を出すと答えが漏れる。
+  const floorCells = useMemo(() => {
+    let total = 0;
+    for (let i = 0; i < state.puzzle.wall.length; i++) if (!state.puzzle.wall[i]) total++;
+    return total;
+  }, [state.puzzle]);
+  const seenCells = floorCells - derived.remaining;
 
   return (
     <div className="app">
@@ -130,9 +131,9 @@ export default function App() {
         <span className="progress">
           <img className="progress-cat" src={CAT_NORMAL_SRC} alt="" draggable={false} />
           <span className="progress-count">
-            <span className="progress-now">{placed}</span>
+            <span className="progress-now">{seenCells}</span>
             <span className="progress-slash">/</span>
-            <span className="progress-total">{size}</span>
+            <span className="progress-total">{floorCells}</span>
           </span>
         </span>
 
@@ -164,7 +165,13 @@ export default function App() {
         </div>
       </section>
 
-      <Board state={state} onTap={handleTap} onPaint={handlePaint} onPaintEnd={handlePaintEnd} />
+      <Board
+        state={state}
+        derived={derived}
+        onTap={handleTap}
+        onPaint={handlePaint}
+        onPaintEnd={handlePaintEnd}
+      />
 
       <footer className="footer">
         <button
@@ -191,7 +198,7 @@ export default function App() {
       </footer>
 
       <AnimatePresence>
-        {state.status !== 'playing' && (
+        {state.status === 'won' && (
           <motion.div
             className="banner"
             initial={{ opacity: 0 }}
@@ -208,37 +215,20 @@ export default function App() {
             >
               <motion.div
                 className="banner-cat"
-                animate={
-                  state.status === 'won'
-                    ? { y: [0, -10, 0] }
-                    : { rotate: [0, -8, 8, -5, 0] }
-                }
-                transition={
-                  state.status === 'won'
-                    ? { duration: 0.9, repeat: Infinity, repeatDelay: 0.4 }
-                    : { duration: 0.7 }
-                }
+                animate={{ y: [0, -10, 0] }}
+                transition={{ duration: 0.9, repeat: Infinity, repeatDelay: 0.4 }}
               >
-                <Cat mood={state.status === 'won' ? 'happy' : 'sad'} className="banner-cat-img" />
+                <Cat mood="happy" className="banner-cat-img" />
               </motion.div>
 
-              {state.status === 'won' ? (
-                <>
-                  <h2>Purrfect!</h2>
-                  <p>Level {state.level} cleared</p>
-                  <button className="banner-btn" type="button" onClick={nextLevel}>
-                    Next level
-                  </button>
-                </>
-              ) : (
-                <>
-                  <h2>Out of tries</h2>
-                  <p>Give this one another go</p>
-                  <button className="banner-btn" type="button" onClick={retry}>
-                    Try again
-                  </button>
-                </>
-              )}
+              <h2>Purrfect!</h2>
+              <p>
+                Level {state.level} cleared
+                {state.hintsUsed > 0 ? ` · ${state.hintsUsed} hint${state.hintsUsed > 1 ? 's' : ''}` : ''}
+              </p>
+              <button className="banner-btn" type="button" onClick={nextLevel}>
+                Next level
+              </button>
             </motion.div>
           </motion.div>
         )}

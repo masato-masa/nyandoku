@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useAnimationControls } from 'motion/react';
 import { useDrag } from '@use-gesture/react';
-import { CAT, CROSS, type GameState, type Mark } from '../core/game';
+import { CAT, CROSS, type Derived, type GameState, type Mark } from '../core/game';
 import { Cat, type Mood } from './Cat';
 import { CrossMark } from './icons';
 
@@ -15,14 +15,15 @@ export type PaintMode = 'draw' | 'erase';
 
 interface BoardProps {
   state: GameState;
+  derived: Derived;
   onTap: (idx: number) => void;
   /** 塗れたら true を返す。返り値で「何手ぶん動いたか」を数える。 */
   onPaint: (idx: number, mode: PaintMode) => boolean;
   onPaintEnd: (moves: number) => void;
 }
 
-export function Board({ state, onTap, onPaint, onPaintEnd }: BoardProps) {
-  const { puzzle, marks, conflicts, conflictToken, status } = state;
+export function Board({ state, derived, onTap, onPaint, onPaintEnd }: BoardProps) {
+  const { puzzle, marks, rejected, rejectToken, status } = state;
   const n = puzzle.n;
 
   const boardRef = useRef<HTMLDivElement>(null);
@@ -34,7 +35,6 @@ export function Board({ state, onTap, onPaint, onPaintEnd }: BoardProps) {
   const moves = useRef(0);
   const [pressed, setPressed] = useState<number | null>(null);
 
-  // ハンドラの中から最新の marks を見るための参照。
   const marksRef = useRef(marks);
   marksRef.current = marks;
 
@@ -44,21 +44,13 @@ export function Board({ state, onTap, onPaint, onPaintEnd }: BoardProps) {
       const el = boardRef.current;
       if (!el) return null;
       const rect = el.getBoundingClientRect();
-      if (
-        clientX < rect.left ||
-        clientX > rect.right ||
-        clientY < rect.top ||
-        clientY > rect.bottom
-      ) {
-        return null;
-      }
+      if (clientX < rect.left || clientX > rect.right) return null;
+      if (clientY < rect.top || clientY > rect.bottom) return null;
 
       const inner = rect.width - PAD * 2;
       const step = (inner - GAP * (n - 1)) / n + GAP;
       const clamp = (v: number) => Math.min(n - 1, Math.max(0, Math.floor(v / step)));
-      const col = clamp(clientX - rect.left - PAD);
-      const row = clamp(clientY - rect.top - PAD);
-      return row * n + col;
+      return clamp(clientY - rect.top - PAD) * n + clamp(clientX - rect.left - PAD);
     },
     [n],
   );
@@ -74,8 +66,8 @@ export function Board({ state, onTap, onPaint, onPaintEnd }: BoardProps) {
   );
 
   /** 前回の位置から今の位置までを歩きながら塗る。
-   *  イベントが飛んでもマスを取りこぼさないようにするための処理で、
-   *  ここが無いと速くなぞったときだけ穴が空く。 */
+   *  イベントが飛んでもマスを取りこぼさないための処理で、
+   *  これが無いと速くなぞったときだけ穴が空く。 */
   const paintAlong = useCallback(
     (x: number, y: number) => {
       const prev = lastPoint.current;
@@ -89,9 +81,7 @@ export function Board({ state, onTap, onPaint, onPaintEnd }: BoardProps) {
 
       const [px, py] = prev;
       const el = boardRef.current;
-      const pitch = el
-        ? (el.getBoundingClientRect().width - PAD * 2 - GAP * (n - 1)) / n
-        : 40;
+      const pitch = el ? (el.getBoundingClientRect().width - PAD * 2 - GAP * (n - 1)) / n : 40;
       const steps = Math.max(1, Math.ceil(Math.hypot(x - px, y - py) / (pitch * 0.4)));
 
       for (let s = 1; s <= steps; s++) {
@@ -111,7 +101,7 @@ export function Board({ state, onTap, onPaint, onPaintEnd }: BoardProps) {
         painted.current.clear();
         lastPoint.current = null;
         moves.current = 0;
-        setPressed(idx);
+        setPressed(idx !== null && !puzzle.wall[idx] ? idx : null);
         return;
       }
 
@@ -143,20 +133,20 @@ export function Board({ state, onTap, onPaint, onPaintEnd }: BoardProps) {
       if (dragging.current) {
         paintAlong(x, y);
         const idx = cellFromPoint(x, y);
-        if (idx !== null) setPressed(idx);
+        if (idx !== null) setPressed(puzzle.wall[idx] ? null : idx);
       }
     },
     { pointer: { touch: true }, filterTaps: false },
   );
 
-  const conflictSet = new Set(conflicts);
+  const rejectedSet = new Set(rejected);
   const won = status === 'won';
-  const mood: Mood = status === 'won' ? 'happy' : status === 'lost' ? 'sad' : 'idle';
+  const mood: Mood = won ? 'happy' : 'idle';
 
-  // 勝ったとき、猫を上から順に跳ねさせるための並び順
-  const catOrder = new Map<number, number>();
-  let order = 0;
-  for (let i = 0; i < marks.length; i++) if (marks[i] === CAT) catOrder.set(i, order++);
+  // クリア時に猫を上から順に跳ねさせるための並び順
+  const order = new Map<number, number>();
+  let k = 0;
+  for (let i = 0; i < marks.length; i++) if (marks[i] === CAT) order.set(i, k++);
 
   return (
     <div
@@ -167,64 +157,83 @@ export function Board({ state, onTap, onPaint, onPaintEnd }: BoardProps) {
         gridTemplateColumns: `repeat(${n}, 1fr)`,
         // 行も明示しないと内容の高さで決まってしまい、猫を置いた瞬間に盤面がずれる
         gridTemplateRows: `repeat(${n}, 1fr)`,
+        // 壁の数字はセルの大きさに追従させる。盤面が 6x6 から 9x9 まで変わるので
+        // 固定 px にすると、大きい盤で数字が窮屈になる。
+        fontSize: `calc((min(92vw, 452px) - ${PAD * 2}px - ${GAP * (n - 1)}px) / ${n} * 0.44)`,
       }}
       role="grid"
       aria-label={`${n}×${n} の盤面`}
     >
-      {Array.from({ length: n * n }, (_, i) => (
-        <Cell
-          key={i}
-          index={i}
-          region={puzzle.regions[i]}
-          mark={marks[i] as Mark}
-          pressed={pressed === i}
-          conflict={conflictSet.has(i)}
-          conflictToken={conflictToken}
-          won={won}
-          lost={status === 'lost'}
-          mood={mood}
-          winOrder={catOrder.get(i) ?? 0}
-        />
-      ))}
+      {Array.from({ length: n * n }, (_, i) => {
+        const num = puzzle.numbers[i];
+        const info = derived.numbers.get(i);
+        return (
+          <Cell
+            key={i}
+            index={i}
+            wall={puzzle.wall[i] === 1}
+            number={num >= 0 ? num : null}
+            over={info ? info.got > info.want : false}
+            done={info ? info.got === info.want : false}
+            candidate={puzzle.candidate[i] === 1}
+            seen={derived.seen[i] === 1}
+            mark={marks[i] as Mark}
+            pressed={pressed === i}
+            rejected={rejectedSet.has(i)}
+            rejectToken={rejectToken}
+            won={won}
+            mood={mood}
+            winOrder={order.get(i) ?? 0}
+          />
+        );
+      })}
     </div>
   );
 }
 
 interface CellProps {
   index: number;
-  region: number;
+  wall: boolean;
+  number: number | null;
+  over: boolean;
+  done: boolean;
+  candidate: boolean;
+  seen: boolean;
   mark: Mark;
   pressed: boolean;
-  conflict: boolean;
-  conflictToken: number;
+  rejected: boolean;
+  rejectToken: number;
   won: boolean;
-  lost: boolean;
   mood: Mood;
   winOrder: number;
 }
 
 const Cell = memo(function Cell({
   index,
-  region,
+  wall,
+  number,
+  over,
+  done,
+  candidate,
+  seen,
   mark,
   pressed,
-  conflict,
-  conflictToken,
+  rejected,
+  rejectToken,
   won,
-  lost,
   mood,
   winOrder,
 }: CellProps) {
   const controls = useAnimationControls();
 
-  // ルール違反。左右に短く振る。振幅を減衰させると「弾かれた」感じになる。
+  // 置けないマスを押した。左右に短く振って弾かれたことを伝える。
   useEffect(() => {
-    if (!conflict || conflictToken === 0) return;
+    if (!rejected || rejectToken === 0) return;
     void controls.start({
       x: [0, -5, 5, -3.5, 3.5, 0],
       transition: { duration: 0.34, ease: 'easeInOut' },
     });
-  }, [conflict, conflictToken, controls]);
+  }, [rejected, rejectToken, controls]);
 
   // クリア時、猫が上から順に跳ねる。
   useEffect(() => {
@@ -235,50 +244,58 @@ const Cell = memo(function Cell({
     });
   }, [won, mark, winOrder, controls]);
 
-  // 失敗時、猫がうなだれて首を振る。
-  useEffect(() => {
-    if (!lost || mark !== CAT) return;
-    void controls.start({
-      rotate: [0, -7, 6, -4, 0],
-      y: [0, 3, 3, 3, 2],
-      transition: { duration: 0.75, ease: 'easeInOut' },
-    });
-  }, [lost, mark, controls]);
+  const className = [
+    'cell',
+    wall ? 'cell-wall' : 'cell-floor',
+    !wall && seen ? 'is-seen' : '',
+    !wall && mark === CAT ? 'has-cat' : '',
+    !wall && !seen && candidate && mark !== CAT ? 'is-candidate' : '',
+    over ? 'is-over' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   return (
     <motion.div
-      className="cell"
+      className={className}
       data-pressed={pressed}
       animate={controls}
-      style={{ background: `var(--r${region % 9})` }}
       role="gridcell"
     >
-      <AnimatePresence initial={false} mode="popLayout">
-        {mark === CAT && (
-          <motion.span
-            key="cat"
-            className="mark"
-            initial={{ scale: 0, rotate: -22 }}
-            animate={{ scale: 1, rotate: 0 }}
-            exit={{ scale: 0, opacity: 0, transition: { duration: 0.12 } }}
-            transition={{ type: 'spring', stiffness: 620, damping: 20, mass: 0.7 }}
-          >
-            <Cat mood={mood} seed={index} />
-          </motion.span>
-        )}
-        {mark === CROSS && (
-          <motion.span
-            key="cross"
-            className="mark"
-            initial={{ scale: 0.35, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            exit={{ scale: 0.4, opacity: 0, transition: { duration: 0.1 } }}
-            transition={{ type: 'spring', stiffness: 760, damping: 28, mass: 0.6 }}
-          >
-            <CrossMark />
-          </motion.span>
-        )}
-      </AnimatePresence>
+      {wall && number !== null && (
+        <span className="wall-number" data-done={done} data-over={over}>
+          {number}
+        </span>
+      )}
+
+      {!wall && (
+        <AnimatePresence initial={false} mode="popLayout">
+          {mark === CAT && (
+            <motion.span
+              key="cat"
+              className="mark"
+              initial={{ scale: 0, rotate: -22 }}
+              animate={{ scale: 1, rotate: 0 }}
+              exit={{ scale: 0, opacity: 0, transition: { duration: 0.12 } }}
+              transition={{ type: 'spring', stiffness: 620, damping: 20, mass: 0.7 }}
+            >
+              <Cat mood={mood} seed={index} />
+            </motion.span>
+          )}
+          {mark === CROSS && (
+            <motion.span
+              key="cross"
+              className="mark"
+              initial={{ scale: 0.35, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.4, opacity: 0, transition: { duration: 0.1 } }}
+              transition={{ type: 'spring', stiffness: 760, damping: 28, mass: 0.6 }}
+            >
+              <CrossMark />
+            </motion.span>
+          )}
+        </AnimatePresence>
+      )}
     </motion.div>
   );
 });

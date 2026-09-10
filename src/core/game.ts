@@ -1,13 +1,18 @@
-import { generatePuzzle, type Puzzle } from './puzzle';
+import {
+  allCovered,
+  coverageOf,
+  generatePuzzle,
+  numberStates,
+  type NumberState,
+  type Puzzle,
+} from './puzzle';
 
 export const EMPTY = 0;
 export const CROSS = 1;
 export const CAT = 2;
 export type Mark = typeof EMPTY | typeof CROSS | typeof CAT;
 
-export const MAX_HEARTS = 3;
-
-/** 1 手ぶんの変更。猫を置くと自動 X も同じ手にまとまるので配列で持つ。 */
+/** 1 手ぶんの変更。ドラッグでまとめて塗った分も 1 手にまとまる。 */
 export interface Change {
   idx: number;
   from: Mark;
@@ -18,124 +23,122 @@ export interface GameState {
   level: number;
   puzzle: Puzzle;
   marks: Uint8Array;
-  hearts: number;
-  status: 'playing' | 'won' | 'lost';
+  status: 'playing' | 'won';
   history: Change[][];
-  /** 直近に衝突したセル。シェイク演出に使う。 */
-  conflicts: number[];
-  /** 同じセルで続けて衝突しても演出をやり直せるように毎回増やす。 */
-  conflictToken: number;
-  /** 直前に猫を置いたセル。ポップ演出の起点。 */
+  /** 直前に猫を置いたマス。 */
   lastPlaced: number | null;
-  /** 猫を置いたとき、置けないマスへ自動で X を打つか。 */
-  autoCross: boolean;
+  /** 置けない場所を押したときに揺らすマス。 */
+  rejected: number[];
+  /** 同じマスで続けて弾かれても演出をやり直せるように毎回増やす。 */
+  rejectToken: number;
   hintsUsed: number;
 }
 
 /**
- * レベルが上がるほど盤面を大きくする。1〜3 は 4x4、以降 3 レベルごとに +1。
- * 上限を 8 にしているのは生成器の都合で、9x9 だと「1 マスだけの領域を作らない」
- * 制約と一意解が両立せず、生成に 100ms 以上かかるため。
+ * レベルが上がるほど盤面を大きくする。1〜3 は 6x6、以降 3 レベルごとに +1。
+ * 上限が 8 なのは生成コストの都合で、9x9 は最良の設定でも最悪 588ms かかり、
+ * 「次のレベルへ」を押した瞬間に固まって見えるため。
  */
 export function sizeForLevel(level: number): number {
-  return Math.min(8, 4 + Math.floor((level - 1) / 3));
+  return Math.min(8, 6 + Math.floor((level - 1) / 3));
 }
 
-export function createGame(level: number, autoCross = true): GameState {
+export function createGame(level: number): GameState {
   const n = sizeForLevel(level);
   const puzzle = generatePuzzle(n, level * 7919 + n * 131);
   return {
     level,
     puzzle,
     marks: new Uint8Array(n * n),
-    hearts: MAX_HEARTS,
     status: 'playing',
     history: [],
-    conflicts: [],
-    conflictToken: 0,
     lastPlaced: null,
-    autoCross,
+    rejected: [],
+    rejectToken: 0,
     hintsUsed: 0,
   };
 }
 
-export const rowOf = (p: Puzzle, idx: number) => Math.floor(idx / p.n);
-export const colOf = (p: Puzzle, idx: number) => idx % p.n;
-
-/** idx に猫を置いたとき、ルールに反する既存の猫の一覧。空なら置ける。 */
-export function conflictsAt(p: Puzzle, marks: Uint8Array, idx: number): number[] {
-  const r = rowOf(p, idx);
-  const c = colOf(p, idx);
-  const out: number[] = [];
-
-  for (let i = 0; i < marks.length; i++) {
-    if (i === idx || marks[i] !== CAT) continue;
-    const rr = rowOf(p, i);
-    const cc = colOf(p, i);
-    const touching = Math.abs(rr - r) <= 1 && Math.abs(cc - c) <= 1;
-    if (rr === r || cc === c || p.regions[i] === p.regions[idx] || touching) out.push(i);
-  }
+export function catsOf(marks: Uint8Array): Set<number> {
+  const out = new Set<number>();
+  for (let i = 0; i < marks.length; i++) if (marks[i] === CAT) out.add(i);
   return out;
 }
 
-/** idx に猫がいるとき、その猫のせいで猫を置けなくなるマスの一覧。 */
-function blockedBy(p: Puzzle, idx: number): number[] {
-  const n = p.n;
-  const r = rowOf(p, idx);
-  const c = colOf(p, idx);
-  const out: number[] = [];
+export const catCount = (marks: Uint8Array): number => catsOf(marks).size;
 
-  for (let i = 0; i < n * n; i++) {
-    if (i === idx) continue;
-    const rr = Math.floor(i / n);
-    const cc = i % n;
-    const touching = Math.abs(rr - r) <= 1 && Math.abs(cc - c) <= 1;
-    if (rr === r || cc === c || p.regions[i] === p.regions[idx] || touching) out.push(i);
+/** UI が必要とする派生情報。状態には持たず、その都度求める。 */
+export interface Derived {
+  cats: Set<number>;
+  /** 1 = いずれかの猫の視野に入っている */
+  seen: Uint8Array;
+  numbers: Map<number, NumberState>;
+  /** 見えていない非壁マスの数 */
+  remaining: number;
+  /** 壁以外を全部見ていて、かつ全ての数字がちょうど合っている */
+  solved: boolean;
+}
+
+export function derive(state: GameState): Derived {
+  const { puzzle } = state;
+  const cats = catsOf(state.marks);
+  const seen = coverageOf(puzzle.n, puzzle.wall, cats);
+  const numbers = numberStates(puzzle, cats);
+
+  let remaining = 0;
+  for (let i = 0; i < puzzle.n * puzzle.n; i++) {
+    if (!puzzle.wall[i] && !seen[i]) remaining++;
   }
-  return out;
-}
 
-function applyChanges(marks: Uint8Array, changes: Change[]): Uint8Array {
-  const next = marks.slice();
-  for (const ch of changes) next[ch.idx] = ch.to;
-  return next;
-}
-
-function countCats(marks: Uint8Array): number {
-  let n = 0;
-  for (const m of marks) if (m === CAT) n++;
-  return n;
-}
-
-/** 手を確定させ、勝敗判定まで済ませた新しい状態を返す。 */
-function commit(state: GameState, changes: Change[]): GameState {
-  if (changes.length === 0) return state;
-  const marks = applyChanges(state.marks, changes);
-  const placed = changes.find((ch) => ch.to === CAT);
-  const won = countCats(marks) === state.puzzle.n;
+  let numbersOk = true;
+  for (const { want, got } of numbers.values()) {
+    if (want !== got) {
+      numbersOk = false;
+      break;
+    }
+  }
 
   return {
+    cats,
+    seen,
+    numbers,
+    remaining,
+    solved: numbersOk && allCovered(puzzle.n, puzzle.wall, seen),
+  };
+}
+
+function commit(state: GameState, changes: Change[]): GameState {
+  if (changes.length === 0) return state;
+
+  const marks = state.marks.slice();
+  for (const ch of changes) marks[ch.idx] = ch.to;
+
+  const placed = changes.find((ch) => ch.to === CAT);
+  const next: GameState = {
     ...state,
     marks,
     history: [...state.history, changes],
     lastPlaced: placed ? placed.idx : state.lastPlaced,
-    conflicts: [],
-    status: won ? 'won' : state.status,
+    rejected: [],
   };
+
+  return derive(next).solved ? { ...next, status: 'won' } : next;
 }
 
 export interface TapResult {
   state: GameState;
-  /** 演出のきっかけ。UI はこれを見て音とアニメーションを出す。 */
-  effect: 'cat' | 'cross' | 'erase' | 'conflict' | 'win' | 'lose' | 'none';
+  effect: 'cat' | 'cross' | 'erase' | 'reject' | 'win' | 'none';
 }
 
 /**
- * タップ 1 回のふるまい。空 → X → 猫 → 空 と巡回する。
- * 猫が置けない位置なら、置かずにハートを 1 つ減らす。
+ * タップ 1 回のふるまい。
+ * 猫を置けるマスは 空 → X → 猫 → 空、置けないマスは 空 → X → 空 と巡回する。
+ * 壁は押しても何も起きない。
  */
 export function tap(state: GameState, idx: number): TapResult {
   if (state.status !== 'playing') return { state, effect: 'none' };
+  const { puzzle } = state;
+  if (puzzle.wall[idx]) return { state, effect: 'none' };
 
   const current = state.marks[idx] as Mark;
 
@@ -147,41 +150,31 @@ export function tap(state: GameState, idx: number): TapResult {
     return { state: commit(state, [{ idx, from: CAT, to: EMPTY }]), effect: 'erase' };
   }
 
-  // X から猫へ。ここだけルール判定が要る。
-  const bad = conflictsAt(state.puzzle, state.marks, idx);
-  if (bad.length > 0) {
-    const hearts = state.hearts - 1;
-    const lost = hearts <= 0;
+  // X から猫へ。数字付きの壁に接していないマスには置けない。
+  if (!puzzle.candidate[idx]) {
     return {
       state: {
         ...state,
-        hearts,
-        status: lost ? 'lost' : state.status,
-        conflicts: [idx, ...bad],
-        conflictToken: state.conflictToken + 1,
+        rejected: [idx],
+        rejectToken: state.rejectToken + 1,
       },
-      effect: lost ? 'lose' : 'conflict',
+      effect: 'reject',
     };
   }
 
-  const changes: Change[] = [{ idx, from: CROSS, to: CAT }];
-  if (state.autoCross) {
-    for (const i of blockedBy(state.puzzle, idx)) {
-      if (state.marks[i] === EMPTY) changes.push({ idx: i, from: EMPTY, to: CROSS });
-    }
-  }
-
-  const next = commit(state, changes);
+  const next = commit(state, [{ idx, from: CROSS, to: CAT }]);
   return { state: next, effect: next.status === 'won' ? 'win' : 'cat' };
 }
 
 /**
  * ドラッグでなぞったときのふるまい。なぞり始めたマスの状態で
  * 「X を塗る」か「X を消す」かを決め、指を離すまでその動作を貫く。
- * 途中で猫のマスに触れても壊さない。
+ * 猫のマスと壁は触れても壊さない。
  */
 export function paint(state: GameState, idx: number, mode: 'draw' | 'erase'): TapResult {
   if (state.status !== 'playing') return { state, effect: 'none' };
+  if (state.puzzle.wall[idx]) return { state, effect: 'none' };
+
   const current = state.marks[idx] as Mark;
 
   if (mode === 'draw' && current === EMPTY) {
@@ -203,7 +196,7 @@ export function mergeLastMoves(state: GameState, count: number): GameState {
 
 export function undo(state: GameState): GameState {
   const last = state.history[state.history.length - 1];
-  if (!last || state.status === 'lost') return state;
+  if (!last) return state;
 
   const marks = state.marks.slice();
   for (const ch of last) marks[ch.idx] = ch.from;
@@ -213,8 +206,8 @@ export function undo(state: GameState): GameState {
     marks,
     history: state.history.slice(0, -1),
     status: 'playing',
-    conflicts: [],
     lastPlaced: null,
+    rejected: [],
   };
 }
 
@@ -222,39 +215,30 @@ export function reset(state: GameState): GameState {
   return {
     ...state,
     marks: new Uint8Array(state.puzzle.n * state.puzzle.n),
-    hearts: MAX_HEARTS,
     status: 'playing',
     history: [],
-    conflicts: [],
     lastPlaced: null,
+    rejected: [],
     hintsUsed: 0,
   };
 }
 
-/** まだ置かれていない正解のマスを 1 つ開ける。 */
+/** まだ置かれていない正解の猫を 1 匹置く。誤って置かれた猫は同時に取り除く。 */
 export function hint(state: GameState): TapResult {
   if (state.status !== 'playing') return { state, effect: 'none' };
   const { puzzle } = state;
+  const correct = new Set(puzzle.solution);
 
-  for (let r = 0; r < puzzle.n; r++) {
-    const idx = r * puzzle.n + puzzle.solution[r];
-    if (state.marks[idx] === CAT) continue;
+  const target = puzzle.solution.find((i) => state.marks[i] !== CAT);
+  if (target === undefined) return { state, effect: 'none' };
 
-    const changes: Change[] = [{ idx, from: state.marks[idx] as Mark, to: CAT }];
-    if (state.autoCross) {
-      for (const i of blockedBy(puzzle, idx)) {
-        if (state.marks[i] === EMPTY) changes.push({ idx: i, from: EMPTY, to: CROSS });
-      }
+  const changes: Change[] = [{ idx: target, from: state.marks[target] as Mark, to: CAT }];
+  for (let i = 0; i < state.marks.length; i++) {
+    if (state.marks[i] === CAT && !correct.has(i)) {
+      changes.push({ idx: i, from: CAT, to: EMPTY });
     }
-    // 誤って置かれていた猫はヒントで消える
-    for (const bad of conflictsAt(puzzle, state.marks, idx)) {
-      changes.push({ idx: bad, from: CAT, to: EMPTY });
-    }
-
-    const next = commit({ ...state, hintsUsed: state.hintsUsed + 1 }, changes);
-    return { state: next, effect: next.status === 'won' ? 'win' : 'cat' };
   }
-  return { state, effect: 'none' };
-}
 
-export const catsPlaced = countCats;
+  const next = commit({ ...state, hintsUsed: state.hintsUsed + 1 }, changes);
+  return { state: next, effect: next.status === 'won' ? 'win' : 'cat' };
+}

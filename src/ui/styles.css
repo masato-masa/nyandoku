@@ -17,16 +17,14 @@
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.05);
 
-  /* 領域色。上 4 色は参考画面からの実測値、以降は同じ彩度帯で拡張した。 */
-  --r0: #e3ba46;
-  --r1: #9179d1;
-  --r2: #e6a8c1;
-  --r3: #c1658a;
-  --r4: #7fbfa6;
-  --r5: #e89b6c;
-  --r6: #7fa8d9;
-  --r7: #b5cf6b;
-  --r8: #d9756b;
+  /* 盤面の色。参考画面のパステル調に合わせつつ、
+     「見えている / 見えていない」が一目で分かる差をつけている。 */
+  --floor: #ebe4dc;
+  --floor-seen: #fbd97e;
+  --floor-cat: #f7c95c;
+  --wall: #6f5a5e;
+  --wall-over: #c4685e;
+  --wall-text: #fff3ee;
 }
 
 * {
@@ -195,12 +193,70 @@ body {
      これが無いと猫を置いた行だけ高さが変わり、盤面全体がずれる。 */
   min-width: 0;
   min-height: 0;
-  transition: filter 0.12s var(--ease);
+  transition: background-color 0.18s var(--ease), filter 0.12s var(--ease);
   will-change: transform;
 }
 
 .cell[data-pressed='true'] {
   filter: brightness(0.92);
+}
+
+.cell-floor {
+  background: var(--floor);
+}
+
+/* 猫の視野に入っているマス。ここが増えていく手応えが遊びの中心なので、
+   色の差ははっきりつけつつ、切り替わりはゆっくり見せる。 */
+.cell-floor.is-seen {
+  background: var(--floor-seen);
+}
+
+/* 猫がいるマスは視野の出どころなので、一段濃くして起点だと分かるようにする。 */
+.cell-floor.has-cat {
+  background: var(--floor-cat);
+}
+
+/* 猫を置けるマスの目印。配置制限は見ただけでは分からないので出している。
+   絶対配置にしてレイアウト計算から外す。 */
+.cell-floor.is-candidate::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 13%;
+  height: 13%;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: rgb(110 92 82 / 0.2);
+}
+
+.cell-wall {
+  background: var(--wall);
+}
+
+.cell-wall.is-over {
+  background: var(--wall-over);
+}
+
+.wall-number {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--wall-text);
+  font-size: 1em;
+  font-weight: 700;
+  line-height: 1;
+  transition: opacity 0.18s var(--ease);
+}
+
+/* ちょうど合った数字は主張を下げる。残りの手がかりが目立つようになる。 */
+.wall-number[data-done='true'] {
+  opacity: 0.42;
+}
+
+.wall-number[data-over='true'] {
+  opacity: 1;
 }
 
 /* マークは絶対配置。レイアウト計算に一切関与させない。 */
