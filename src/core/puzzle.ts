@@ -1,4 +1,4 @@
-// 猫の視野パズルの生成器とソルバ。
+// 猫の視野パズルの生成器・ソルバ・難易度の測定器。
 //
 // ルール:
 //   - 盤面の一部が壁。壁の一部には数字が書いてある
@@ -14,7 +14,7 @@
 
 export interface Puzzle {
   readonly n: number;
-  readonly seed: number;
+  readonly level: number;
   /** 1 = 壁 */
   readonly wall: Uint8Array;
   /** -1 = 数字なし、0 以上 = 隣接 8 マスの猫の数 */
@@ -23,6 +23,21 @@ export interface Puzzle {
   readonly candidate: Uint8Array;
   /** 正解の猫の位置 */
   readonly solution: number[];
+  /** 生成に使ったつまみ。調整のとき何が効いたか追えるように残す。 */
+  readonly knobs: Knobs;
+  /** 難易度の点数。目安であって絶対的な尺度ではない。 */
+  readonly difficulty: number;
+  readonly analysis: Analysis;
+}
+
+/** 盤面を作るときのつまみ。難易度の軸はここに集約している。 */
+export interface Knobs {
+  /** 盤面の一辺。見る範囲の広さ。 */
+  n: number;
+  /** 壁になるマスの割合。下げると視線が伸び、被覆の推論が増える。 */
+  wallDensity: number;
+  /** 壁のうち数字を書く割合。下げると手がかりが減る。 */
+  numberRatio: number;
 }
 
 const N8: ReadonlyArray<readonly [number, number]> = [
@@ -126,9 +141,6 @@ function wallAdjacentCells(n: number, wall: Uint8Array): number[] {
  *
  *   最大利得を選ぶ  0:231  1:471  2:155  3:12  4:0   （猫 7.8 匹）
  *   候補から無作為  0:159  1:436  2:300  3:78  4:6   （猫 10.6 匹）
- *
- * そこで「1 マス以上新しく照らす候補」から無作為に選ぶ。猫は増えるが、
- * 数字の種類が広がって推理の手がかりが増える。
  */
 function findCover(
   n: number,
@@ -221,38 +233,236 @@ export function countSolutions(n: number, wall: Uint8Array, numbers: Int8Array, 
   return found;
 }
 
+// ---- 難易度の測定 ----
+
+export interface Analysis {
+  /** 推測なしで最後まで解けたか。これを満たさない問題は出さない。 */
+  solved: boolean;
+  /** 推論の往復回数。確定の連鎖がどれだけ続くか。 */
+  rounds: number;
+  /** 数字から確定したマスの数。 */
+  byNumber: number;
+  /** 視野の被覆から確定したマスの数。人にとってはこちらのほうが重い。 */
+  byCover: number;
+  /** 猫を置ける候補マスの数。探索の広さ。 */
+  candidates: number;
+}
+
+const UNKNOWN = 0;
+const IS_CAT = 1;
+const IS_EMPTY = 2;
+
 /**
- * 壁になるマスの割合。盤面が大きいほど上げる。
- * 壁が少ないと候補マスが増えて一意解に届かず、生成が急激に遅くなる。
+ * 人が使う推論だけを機械的に回して、どこまで確定できるかを測る。
+ *
+ * 使う推論は 2 種類だけ:
+ *   A 数字  ある壁の数字が k のとき、まわりの猫が k 匹揃えば残りは空。
+ *           空きマスを全部使わないと k に届かないなら残りは全部猫。
+ *   B 被覆  まだ誰にも見えていないマスを見られる候補が 1 つしかないなら、そこは猫。
+ *
+ * 「解が一意か」の検査とは別物。一意でも、この推論だけでは詰まる（＝推測が要る）
+ * 問題は普通に出てくる。実測では旧設定の 25〜42% がそうだった。
  */
-function wallDensity(n: number): number {
-  if (n <= 6) return 0.33;
-  if (n === 7) return 0.4;
-  return 0.43;
+export function analyse(
+  n: number,
+  wall: Uint8Array,
+  numbers: Int8Array,
+  candidate: Uint8Array,
+): Analysis {
+  const size = n * n;
+
+  const masks = new Map<number, Uint8Array>();
+  for (let i = 0; i < size; i++) if (candidate[i]) masks.set(i, visionOf(n, wall, i));
+
+  const state = new Uint8Array(size);
+  // 猫を置けないマスは最初から空で確定している
+  for (let i = 0; i < size; i++) if (!wall[i] && !candidate[i]) state[i] = IS_EMPTY;
+
+  const numberedWalls: number[] = [];
+  for (let i = 0; i < size; i++) if (wall[i] && numbers[i] >= 0) numberedWalls.push(i);
+  const wallNbrs = new Map<number, number[]>();
+  for (const w of numberedWalls) wallNbrs.set(w, neighbours8(n, w).filter((c) => !wall[c]));
+
+  const currentlySeen = (): Uint8Array => {
+    const s = new Uint8Array(size);
+    for (let i = 0; i < size; i++) {
+      if (state[i] !== IS_CAT) continue;
+      const m = masks.get(i)!;
+      for (let j = 0; j < size; j++) if (m[j]) s[j] = 1;
+    }
+    return s;
+  };
+
+  let rounds = 0;
+  let byNumber = 0;
+  let byCover = 0;
+  let contradiction = false;
+
+  for (;;) {
+    let changed = false;
+    rounds++;
+
+    // A 数字の推論
+    for (const w of numberedWalls) {
+      const want = numbers[w];
+      const cells = wallNbrs.get(w)!;
+      let cats = 0;
+      const unknown: number[] = [];
+      for (const c of cells) {
+        if (state[c] === IS_CAT) cats++;
+        else if (state[c] === UNKNOWN) unknown.push(c);
+      }
+      if (cats > want) {
+        contradiction = true;
+        break;
+      }
+      if (unknown.length === 0) continue;
+      if (cats === want) {
+        for (const c of unknown) state[c] = IS_EMPTY;
+        byNumber += unknown.length;
+        changed = true;
+      } else if (cats + unknown.length === want) {
+        for (const c of unknown) state[c] = IS_CAT;
+        byNumber += unknown.length;
+        changed = true;
+      }
+    }
+    if (contradiction) break;
+
+    // B 被覆の推論
+    const seen = currentlySeen();
+    for (let c = 0; c < size; c++) {
+      if (wall[c] || seen[c]) continue;
+      let only = -1;
+      let count = 0;
+      for (const [x, m] of masks) {
+        if (state[x] === IS_EMPTY || !m[c]) continue;
+        count++;
+        only = x;
+        if (count > 1) break;
+      }
+      if (count === 0) {
+        contradiction = true;
+        break;
+      }
+      if (count === 1 && state[only] === UNKNOWN) {
+        state[only] = IS_CAT;
+        byCover++;
+        changed = true;
+      }
+    }
+    if (contradiction) break;
+
+    if (!changed) break;
+    // 念のための安全弁。通常ここには達しない。
+    if (rounds > 200) break;
+  }
+
+  const seen = currentlySeen();
+  const numbersOk = numberedWalls.every(
+    (w) => wallNbrs.get(w)!.filter((c) => state[c] === IS_CAT).length === numbers[w],
+  );
+
+  return {
+    solved: !contradiction && numbersOk && allCovered(n, wall, seen),
+    rounds,
+    byNumber,
+    byCover,
+    candidates: masks.size,
+  };
 }
 
 /**
- * 壁のうち数字を書く割合。
+ * 難易度の重み。調整はここだけ触ればよい。
  *
- * 見た目のためには少ないほうがよいが、数字は制約でもあるので、減らすと
- * 一意解の探索が枝刈りされず生成が跳ね上がる。密度より遥かに効く。
- * 実測（8x8・猫は無作為選択）:
- *   数字 60% → 中央 66ms・最悪 1045ms
- *   数字 80% → 中央  2ms・最悪   25ms  （数字の分布はほぼ同じ）
- * 一意にならなければ数字を足していく修復方式も試したが、最悪 556ms で
- * この単純な設定に負けたため採用していない。
+ * 実測での各指標の幅（論理で解ける問題のみ）:
+ *   candidates  9 〜 33    盤面サイズと壁密度で動く。探索の広さ
+ *   byCover     0 〜 5     壁密度を下げると増える。視野で考える場面の多さ
+ *   rounds      2 〜 6     確定の連鎖の長さ
+ *
+ * candidates を重くするとサイズがそのまま難易度になり、高いレベルに大きい盤しか
+ * 出なくなる。推論の深さ（byCover と rounds）を重くすることで、小さい盤でも
+ * 難しくなりうる形にしている。
  */
-const NUMBER_RATIO = 0.8;
+export const DIFFICULTY_WEIGHTS = {
+  candidates: 0.6,
+  byCover: 6,
+  rounds: 4,
+} as const;
 
-/** 解が一意になるまで作り直す。同じ seed なら必ず同じ問題が出る。 */
-export function generatePuzzle(n: number, seed: number): Puzzle {
-  const rng = mulberry32(seed);
+export function difficultyOf(a: Analysis): number {
+  return (
+    a.candidates * DIFFICULTY_WEIGHTS.candidates +
+    a.byCover * DIFFICULTY_WEIGHTS.byCover +
+    a.rounds * DIFFICULTY_WEIGHTS.rounds
+  );
+}
 
-  const density = wallDensity(n);
+/**
+ * レベルに対する目標難易度。
+ * 上がり続けるのではなく上限に漸近させ、さらに揺らぎを持たせている。
+ * 「レベルが高いほど難しい傾向はあるが、必ずそうとは限らない」という形。
+ */
+export function targetDifficulty(level: number, rng: () => number): number {
+  const base = 18 + 34 * (1 - Math.exp(-(level - 1) / 9));
+  const jitter = 1 + (rng() * 2 - 1) * 0.2;
+  return base * jitter;
+}
 
-  for (let attempt = 0; attempt < 8000; attempt++) {
+/**
+ * 盤面サイズの抽選。レベルが上がるほど大きい盤が出やすくなるが、
+ * 小さい盤も出続ける。サイズは難易度の一要素でしかない。
+ */
+function sampleSize(level: number, rng: () => number): number {
+  const t = Math.min(1, (level - 1) / 18);
+  const weights: Array<[number, number]> = [
+    [5, 0.4 - 0.3 * t],
+    [6, 0.35 - 0.1 * t],
+    [7, 0.18 + 0.15 * t],
+    [8, 0.07 + 0.25 * t],
+  ];
+  const total = weights.reduce((s, [, w]) => s + w, 0);
+  let r = rng() * total;
+  for (const [n, w] of weights) {
+    r -= w;
+    if (r <= 0) return n;
+  }
+  return 6;
+}
+
+/**
+ * つまみの抽選。
+ * 壁を減らすほど視野の推論が増えて面白くなるが、生成コストが跳ね上がる。
+ * 実測（n=7）: 密度 0.30 → 被覆推論 4.9 回だが 948ms/問、
+ *              密度 0.48 → 被覆推論 1.4 回で 1ms/問。
+ * 大きい盤ほど下限を上げて、現実的な時間に収めている。
+ */
+function sampleKnobs(level: number, rng: () => number): Knobs {
+  const n = sampleSize(level, rng);
+  const minDensity = n >= 8 ? 0.4 : n === 7 ? 0.36 : 0.28;
+  const minRatio = n >= 7 ? 0.72 : 0.6;
+  return {
+    n,
+    wallDensity: minDensity + rng() * (0.5 - minDensity),
+    numberRatio: minRatio + rng() * (1 - minRatio),
+  };
+}
+
+interface RawPuzzle {
+  n: number;
+  wall: Uint8Array;
+  numbers: Int8Array;
+  candidate: Uint8Array;
+  solution: number[];
+}
+
+/** つまみ 1 組から盤面を 1 つ作る。作れなければ null。 */
+function tryGenerate(knobs: Knobs, rng: () => number, attempts: number): RawPuzzle | null {
+  const { n, wallDensity, numberRatio } = knobs;
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
     const wall = new Uint8Array(n * n);
-    for (let i = 0; i < n * n; i++) if (rng() < density) wall[i] = 1;
+    for (let i = 0; i < n * n; i++) if (rng() < wallDensity) wall[i] = 1;
 
     const cells = wallAdjacentCells(n, wall);
     if (cells.length === 0) continue;
@@ -282,7 +492,7 @@ export function generatePuzzle(n: number, seed: number): Puzzle {
     // そのうえで、指定の割合になるまで数字付きの壁を足す
     const allWalls: number[] = [];
     for (let i = 0; i < n * n; i++) if (wall[i]) allWalls.push(i);
-    const want = Math.round(allWalls.length * NUMBER_RATIO);
+    const want = Math.round(allWalls.length * numberRatio);
     let numbered = allWalls.filter((w) => numbers[w] >= 0).length;
     for (const w of allWalls) {
       if (numbered >= want) break;
@@ -306,10 +516,72 @@ export function generatePuzzle(n: number, seed: number): Puzzle {
 
     if (countSolutions(n, wall, numbers, 2) !== 1) continue;
 
-    return { n, seed, wall, numbers, candidate, solution: cats };
+    return { n, wall, numbers, candidate, solution: cats };
+  }
+  return null;
+}
+
+/**
+ * 目標難易度にどれだけ近ければ十分とみなすか。
+ * 厳しくすると狙いは正確になるが、条件に合う盤面を探し続けて生成が遅くなる。
+ */
+const CLOSE_ENOUGH = 0.13;
+/**
+ * つまみを引き直す回数。時間ではなく回数で区切っているのは、
+ * 実行速度で結果が変わると「同じレベルは同じ盤面」が崩れるため。
+ */
+const KNOB_ATTEMPTS = 18;
+/** 1 組のつまみで盤面を作り直す上限。 */
+const BOARD_ATTEMPTS = 260;
+
+/**
+ * レベルから盤面を作る。同じレベルなら必ず同じ盤面になる。
+ *
+ * サイズをレベルから直接決めるのはやめ、複数の軸で作った候補に難易度の点数を
+ * つけて、そのレベルの目標に一番近いものを選ぶ。おかげで高いレベルでも
+ * 小さい盤面が出るし、レベルと難しさは「傾向として」しか結び付かない。
+ */
+export function generateForLevel(level: number): Puzzle {
+  const rng = mulberry32(level * 7919 + 104729);
+  const target = targetDifficulty(level, rng);
+
+  let best: { raw: RawPuzzle; knobs: Knobs; analysis: Analysis; score: number } | null = null;
+
+  for (let i = 0; i < KNOB_ATTEMPTS; i++) {
+    const knobs = sampleKnobs(level, rng);
+    const raw = tryGenerate(knobs, rng, BOARD_ATTEMPTS);
+    if (!raw) continue;
+
+    const analysis = analyse(raw.n, raw.wall, raw.numbers, raw.candidate);
+    // 推測が要る問題は出さない
+    if (!analysis.solved) continue;
+
+    const score = difficultyOf(analysis);
+    const gap = Math.abs(score - target);
+    if (!best || gap < Math.abs(best.score - target)) best = { raw, knobs, analysis, score };
+    if (gap <= target * CLOSE_ENOUGH) break;
   }
 
-  throw new Error(`一意な解を持つ ${n}x${n} の盤面を生成できませんでした (seed=${seed})`);
+  if (!best) {
+    // どれも条件を満たさなかった。作りやすい設定で妥協する。
+    const knobs: Knobs = { n: 6, wallDensity: 0.45, numberRatio: 0.9 };
+    const raw = tryGenerate(knobs, rng, 4000);
+    if (!raw) throw new Error(`レベル ${level} の盤面を生成できませんでした`);
+    const analysis = analyse(raw.n, raw.wall, raw.numbers, raw.candidate);
+    best = { raw, knobs, analysis, score: difficultyOf(analysis) };
+  }
+
+  return {
+    n: best.raw.n,
+    level,
+    wall: best.raw.wall,
+    numbers: best.raw.numbers,
+    candidate: best.raw.candidate,
+    solution: best.raw.solution,
+    knobs: best.knobs,
+    difficulty: best.score,
+    analysis: best.analysis,
+  };
 }
 
 export interface NumberState {

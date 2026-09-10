@@ -1,7 +1,7 @@
 import {
   allCovered,
   coverageOf,
-  generatePuzzle,
+  generateForLevel,
   numberStates,
   type NumberState,
   type Puzzle,
@@ -34,22 +34,14 @@ export interface GameState {
   hintsUsed: number;
 }
 
-/**
- * レベルが上がるほど盤面を大きくする。1〜3 は 6x6、以降 3 レベルごとに +1。
- * 上限が 8 なのは生成コストの都合で、9x9 は最良の設定でも最悪 588ms かかり、
- * 「次のレベルへ」を押した瞬間に固まって見えるため。
- */
-export function sizeForLevel(level: number): number {
-  return Math.min(8, 6 + Math.floor((level - 1) / 3));
-}
-
 export function createGame(level: number): GameState {
-  const n = sizeForLevel(level);
-  const puzzle = generatePuzzle(n, level * 7919 + n * 131);
+  // 盤面の大きさはレベルから直接決めず、難易度の目標に合う候補の中から選ばれる。
+  // そのため高いレベルでも小さい盤面が出る。
+  const puzzle = generateForLevel(level);
   return {
     level,
     puzzle,
-    marks: new Uint8Array(n * n),
+    marks: new Uint8Array(puzzle.n * puzzle.n),
     status: 'playing',
     history: [],
     lastPlaced: null,
