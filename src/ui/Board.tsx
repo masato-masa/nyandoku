@@ -175,7 +175,6 @@ export function Board({ state, derived, onTap, onPaint, onPaintEnd }: BoardProps
             number={num >= 0 ? num : null}
             over={info ? info.got > info.want : false}
             done={info ? info.got === info.want : false}
-            candidate={puzzle.candidate[i] === 1}
             seen={derived.seen[i] === 1}
             mark={marks[i] as Mark}
             pressed={pressed === i}
@@ -197,7 +196,6 @@ interface CellProps {
   number: number | null;
   over: boolean;
   done: boolean;
-  candidate: boolean;
   seen: boolean;
   mark: Mark;
   pressed: boolean;
@@ -214,7 +212,6 @@ const Cell = memo(function Cell({
   number,
   over,
   done,
-  candidate,
   seen,
   mark,
   pressed,
@@ -249,7 +246,6 @@ const Cell = memo(function Cell({
     wall ? 'cell-wall' : 'cell-floor',
     !wall && seen ? 'is-seen' : '',
     !wall && mark === CAT ? 'has-cat' : '',
-    !wall && !seen && candidate && mark !== CAT ? 'is-candidate' : '',
     over ? 'is-over' : '',
   ]
     .filter(Boolean)

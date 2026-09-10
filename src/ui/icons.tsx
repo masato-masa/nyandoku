@@ -4,7 +4,7 @@
 export function CrossMark() {
   return (
     <svg className="cell-cross" viewBox="0 0 24 24" aria-hidden="true">
-      <g stroke="currentColor" strokeWidth="3.6" strokeLinecap="round">
+      <g stroke="currentColor" strokeWidth="4.4" strokeLinecap="round">
         <path d="M6 6 L18 18" />
         <path d="M18 6 L6 18" />
       </g>
@@ -24,6 +24,19 @@ export function HelpIcon() {
         strokeLinecap="round"
       />
       <circle cx="12.6" cy="16.6" r="1.25" fill="#fff" />
+    </svg>
+  );
+}
+
+export function LevelsIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="9.4" fill="#9179D1" />
+      <g fill="#fff">
+        <rect x="7" y="7.6" width="10" height="2.1" rx="1.05" />
+        <rect x="7" y="10.95" width="10" height="2.1" rx="1.05" />
+        <rect x="7" y="14.3" width="6.4" height="2.1" rx="1.05" />
+      </g>
     </svg>
   );
 }

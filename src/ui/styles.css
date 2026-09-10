@@ -137,39 +137,6 @@ body {
   opacity: 0.4;
 }
 
-/* ---- ルール ---- */
-.rules {
-  width: 100%;
-  max-width: 690px;
-  padding: 8px;
-  margin-bottom: 4px;
-  background: rgb(255 255 255 / 0.9);
-  border-radius: var(--card-radius);
-  box-shadow: var(--shadow-xs);
-}
-
-.rules-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-}
-
-.rule {
-  margin: 0;
-  min-height: 64px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 8px 12px;
-  border-radius: 12px;
-  background: var(--pill-bg);
-  color: var(--pill-fg);
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 1.4;
-}
-
 /* ---- 盤面 ---- */
 .board {
   width: min(92vw, 452px);
@@ -214,20 +181,6 @@ body {
 /* 猫がいるマスは視野の出どころなので、一段濃くして起点だと分かるようにする。 */
 .cell-floor.has-cat {
   background: var(--floor-cat);
-}
-
-/* 猫を置けるマスの目印。配置制限は見ただけでは分からないので出している。
-   絶対配置にしてレイアウト計算から外す。 */
-.cell-floor.is-candidate::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 13%;
-  height: 13%;
-  transform: translate(-50%, -50%);
-  border-radius: 999px;
-  background: rgb(110 92 82 / 0.2);
 }
 
 .cell-wall {
@@ -290,11 +243,11 @@ body {
 }
 
 .cell-cross {
-  width: 32%;
-  height: 32%;
+  width: 34%;
+  height: 34%;
   display: block;
   pointer-events: none;
-  color: rgb(70 48 40 / 0.38);
+  color: rgb(58 40 34 / 0.68);
 }
 
 /* ---- フッター ---- */
@@ -433,5 +386,110 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .cat-img {
     animation: none;
+  }
+}
+
+/* ---- ダイアログ（遊びかた・レベル一覧） ---- */
+.sheet {
+  background: var(--surface);
+  border-radius: 22px;
+  padding: 26px 26px 22px;
+  box-shadow: 0 18px 50px rgb(115 80 86 / 0.16);
+  width: min(92vw, 420px);
+  max-height: min(80dvh, 620px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sheet-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--title);
+  text-align: center;
+}
+
+.sheet-subtitle {
+  margin: 6px 0 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--pill-fg);
+}
+
+.help-list {
+  margin: 0;
+  padding-left: 1.15em;
+  display: grid;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--pill-fg);
+}
+
+.help-list li::marker {
+  color: #c9b0a8;
+}
+
+/* ---- レベル一覧 ---- */
+/* 下から上に 1 → 最新 と並ぶ。描画は大きい番号から流し込んでいる。 */
+.level-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px;
+  margin: 0 -2px;
+  overscroll-behavior: contain;
+}
+
+.level-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--pill-bg);
+  color: var(--pill-fg);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.14s var(--ease), background-color 0.14s var(--ease);
+}
+
+.level-row:hover {
+  background: #f6e6dd;
+}
+
+.level-row:active {
+  transform: scale(0.98);
+}
+
+/* 今いるレベル。一覧を開いた瞬間に現在地が分かるようにする。 */
+.level-row[data-current='true'] {
+  background: #ece4fa;
+  color: #6b57a8;
+  outline: 2px solid #9179d1;
+  outline-offset: -2px;
+}
+
+.level-no {
+  font-variant-numeric: tabular-nums;
+}
+
+.level-cat {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  display: block;
+}
+
+@media (max-width: 640px) {
+  .sheet {
+    padding: 22px 20px 18px;
   }
 }
