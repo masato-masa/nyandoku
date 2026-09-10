@@ -28,6 +28,11 @@ export interface Puzzle {
   /** 難易度の点数。目安であって絶対的な尺度ではない。 */
   readonly difficulty: number;
   readonly analysis: Analysis;
+  /**
+   * どの段階で作られたか。1 が通常。2 以降は条件を緩めて作ったもので、
+   * 重みを変えたあとの監査（scripts/audit-levels.mjs）で偏りを見るのに使う。
+   */
+  readonly stage: 1 | 2 | 3 | 4;
 }
 
 /** 盤面を作るときのつまみ。難易度の軸はここに集約している。 */
@@ -279,6 +284,8 @@ export interface Analysis {
   byNumber: number;
   /** 被覆推論で確定したマスの数。被覆は 1 回につき 1 マスなので回数と同じ。 */
   byCover: number;
+  /** 集合の推論を使った回数。数字や被覆より一段上の技法。 */
+  bySubset: number;
   /** 背理法 1 回ごとの内訳。 */
   contradictions: ContradictionStep[];
   /** 背理法の最大段数。理不尽さの上限を測るための値。 */
@@ -327,6 +334,7 @@ interface PropResult {
   /** 推論を適用した回数。 */
   numberSteps: number;
   coverSteps: number;
+  subsetSteps: number;
   /**
    * 確定の連鎖が何段続いたか。
    *
@@ -371,6 +379,7 @@ function propagate(ctx: Ctx, state: Uint8Array): PropResult {
   let coverCells = 0;
   let numberSteps = 0;
   let coverSteps = 0;
+  let subsetSteps = 0;
   let levels = 0;
 
   const result = (contradiction: boolean): PropResult => ({
@@ -379,6 +388,7 @@ function propagate(ctx: Ctx, state: Uint8Array): PropResult {
     coverCells,
     numberSteps,
     coverSteps,
+    subsetSteps,
     levels,
   });
 
@@ -388,6 +398,7 @@ function propagate(ctx: Ctx, state: Uint8Array): PropResult {
     let conflict = false;
     let nSteps = 0;
     let cSteps = 0;
+    let sSteps = 0;
 
     const propose = (cell: number, value: number): void => {
       const prev = pending.get(cell);
@@ -415,6 +426,80 @@ function propagate(ctx: Ctx, state: Uint8Array): PropResult {
       } else if (cats + unknown.length === want) {
         for (const c of unknown) propose(c, IS_CAT);
         nSteps++;
+      }
+    }
+    if (conflict) return result(true);
+
+    // C 集合の推論。
+    //
+    // 「どのマスかは分からないが、この 2 マスのどちらかに猫がいる」という情報は、
+    // 別の数字に流用できる。2 つの数字の未確定集合が重なっているとき、重なりに
+    // 入る猫の数の上下限が決まり、そこから差分の猫の数が絞れる。
+    //
+    // 包含（片方がもう片方にすっぽり入る）はこの特殊ケース。
+    // 数独のポインティングペア、マインスイーパの 1-2 パターンと同じ族で、
+    // 個別のマスではなく集合について考えるぶん A や B より一段上の技法になる。
+    const sets: Array<{ min: number; max: number; cells: number[] }> = [];
+
+    for (const w of ctx.numberedWalls) {
+      const cells = ctx.wallNbrs.get(w)!;
+      let cats = 0;
+      const unknown: number[] = [];
+      for (const c of cells) {
+        if (state[c] === UNKNOWN) unknown.push(c);
+        else if (state[c] === IS_CAT) cats++;
+      }
+      const need = ctx.numbers[w] - cats;
+      // 全部猫・全部空は A で処理済みなので、中途半端なものだけ集める
+      if (unknown.length >= 2 && need >= 1 && need < unknown.length) {
+        sets.push({ min: need, max: need, cells: unknown });
+      }
+    }
+
+    // B2 被覆から来る集合。「このマスを見られる候補はこれだけ」なので、
+    // その中に最低 1 匹はいる。数字と違って上限は決まらない。
+    const litNow = seenFrom(ctx, state);
+    for (let c = 0; c < ctx.size; c++) {
+      if (ctx.wall[c] || litNow[c]) continue;
+      const sources: number[] = [];
+      for (const [x, m] of ctx.masks) {
+        if (state[x] === IS_EMPTY || !m[c]) continue;
+        if (state[x] === UNKNOWN) sources.push(x);
+      }
+      if (sources.length >= 2 && sources.length <= 6) {
+        sets.push({ min: 1, max: sources.length, cells: sources });
+      }
+    }
+
+    for (const a of sets) {
+      for (const b of sets) {
+        if (a === b) continue;
+        // b の中で、a と重なる部分と重ならない部分に分ける
+        const rest: number[] = [];
+        let overlap = 0;
+        for (const c of b.cells) {
+          if (a.cells.includes(c)) overlap++;
+          else rest.push(c);
+        }
+        if (overlap === 0 || rest.length === 0) continue;
+
+        // 重なりに入る猫の数の範囲。a の側から絞れる。
+        const outsideA = a.cells.length - overlap;
+        const overlapMin = Math.max(0, a.min - outsideA);
+        const overlapMax = Math.min(a.max, overlap);
+
+        // b は全体で b.min〜b.max 匹。差分に入るのはその残り。
+        const restMax = b.max - overlapMin;
+        const restMin = b.min - overlapMax;
+        if (restMax < 0 || restMin > rest.length) return result(true);
+
+        if (restMax === 0) {
+          for (const c of rest) propose(c, IS_EMPTY);
+          sSteps++;
+        } else if (restMin === rest.length) {
+          for (const c of rest) propose(c, IS_CAT);
+          sSteps++;
+        }
       }
     }
     if (conflict) return result(true);
@@ -456,6 +541,7 @@ function propagate(ctx: Ctx, state: Uint8Array): PropResult {
     }
     numberSteps += nSteps;
     coverSteps += cSteps;
+    subsetSteps += sSteps;
     levels++;
 
     // 念のための安全弁。通常ここには達しない。
@@ -515,6 +601,7 @@ export function analyse(
   let chainDepth = 0;
   let byNumber = 0;
   let byCover = 0;
+  let bySubset = 0;
   const contradictions: ContradictionStep[] = [];
   let solvedBasic = false;
   let broken = false;
@@ -525,6 +612,7 @@ export function analyse(
     if (r.levels > chainDepth) chainDepth = r.levels;
     byNumber += r.numberCells;
     byCover += r.coverCells;
+    bySubset += r.subsetSteps;
     if (r.contradiction) {
       broken = true;
       break;
@@ -600,6 +688,7 @@ export function analyse(
     chainDepth,
     byNumber,
     byCover,
+    bySubset,
     contradictions,
     maxContradictionDepth: contradictions.length
       ? Math.max(...contradictions.map((c) => c.depth))
@@ -611,40 +700,49 @@ export function analyse(
 /**
  * 難易度の重み。調整はここだけ触ればよい。
  *
- * 実測での各指標の幅（論理で解ける問題のみ）:
- *   candidates  9 〜 33    盤面サイズと壁密度で動く。探索の広さ
- *   byCover     0 〜 5     壁密度を下げると増える。視野で考える場面の多さ
- *   chainDepth  1 〜 ?     確定の依存関係の深さ。芋づるが何段続いたか
+ * 重要なのは「解法に気づくまで」が難易度で、「同じ解法の繰り返し」は作業だという点。
+ * 回数に比例させると、盤面を大きくして手数を増やすだけで難易度が上がってしまい、
+ * 体感と合わない。そこで技法ごとに **初出コスト** と **反復コスト** を分け、
+ * 反復を大幅に安くしている。
  *
- * candidates を重くするとサイズがそのまま難易度になり、高いレベルに大きい盤しか
- * 出なくなる。推論の深さ（byCover と rounds）を重くすることで、小さい盤でも
- * 難しくなりうる形にしている。
- * 数字推論の回数は入れていない。作業量であって難しさではないため。
+ * 1 回しか使わない面と 10 回使う面が同じ点数なのも体感と違うので、反復も
+ * ゼロにはしない。
  */
-export const DIFFICULTY_WEIGHTS = {
-  candidates: 0.35,
-  byCover: 4,
-  chainDepth: 3.5,
+export const TECHNIQUE_COST = {
+  /**
+   * 被覆の推論。「このマスを見られるのはここだけ」。
+   * 数字と違って探索の起点が無く、自分で危ないマスを見つける必要がある。
+   */
+  cover: { first: 12, repeat: 1.5 },
+  /**
+   * 集合の推論。「どのマスかは分からないがこの中に猫がいる」を別の数字に流用する。
+   * 個別のマスではなく集合について考えるので、一段上の技法。
+   */
+  subset: { first: 22, repeat: 2 },
 } as const;
 
 /**
- * 背理法 1 回あたりの重み。
- *
- * 基準は「最も狭い分岐の中で最も浅い矛盾」で、そこの段数で点をつける。
- * そのうえで、そもそも二択の状況が無く三択・四択からしか入れない局面は
- * 取りかかり自体が難しいので、幅のぶんを加算する。
- *
- * 段数は実測ではほとんど 1 段になる（35 局面中 34 局面）。これは理論的な
- * 必然ではなく、今の盤面構成（壁が密で数字が多い）ゆえの結果で、壁を減らせば
- * 段数は伸びる。レベルが上がって目標点が高くなると、二択 1 段では届かなくなり、
- * 三択や 2 段以上の盤面が選ばれるようになる想定。
- *
- * 連鎖の中に被覆推論が混ざるとさらに重い。数字を追っていた頭を
- * 「このマスは誰が見るのか」に切り替えさせられるため。
+ * 盤面の広さ。平方根にしているのは、広いほど難しいのは確かでも比例ではないため。
+ * ここを線形にすると「大きい盤にすれば難しい」になってしまう。
  */
-const DEPTH_COST: Record<number, number> = { 1: 12, 2: 20, 3: 28, 4: 36 };
-const WIDTH_BONUS: Record<number, number> = { 2: 0, 3: 6, 4: 12 };
-const WIDE_BRANCH_BONUS = 18;
+const BREADTH_WEIGHT = 2.5;
+
+/** 確定の連鎖が何段続くか。長いほど手数は増えるが、難しさは頭打ちになる。 */
+const CHAIN_WEIGHT = 2;
+
+/**
+ * 背理法は 1 回ごとに幅と段数から重みが決まるが、そのまま足し合わせない。
+ * 2 回目以降は「同じことをもう一度やる」だけなので割り引く。
+ */
+const CONTRADICTION_REPEAT_DISCOUNT = 0.35;
+
+const DEPTH_COST: Record<number, number> = { 1: 40, 2: 85, 3: 145, 4: 225 };
+/**
+ * 幅は加算ではなく倍率にしている。
+ * 「幅が広い」と「段数が多い」は独立した負担ではなく、掛け合わさって効く。
+ */
+const WIDTH_MULTIPLIER: Record<number, number> = { 2: 1.0, 3: 1.5, 4: 2.1, 5: 2.8 };
+const WIDE_BRANCH_MULTIPLIER = 3.6;
 const COVER_IN_CONTRADICTION = 5;
 
 /**
@@ -653,24 +751,37 @@ const COVER_IN_CONTRADICTION = 5;
  */
 export const MAX_CONTRADICTION_DEPTH = 4;
 
+/** 技法 1 種類ぶんの点数。初出は高く、繰り返しは安く。 */
+function techniqueCost(count: number, cost: { first: number; repeat: number }): number {
+  if (count <= 0) return 0;
+  return cost.first + cost.repeat * (count - 1);
+}
+
 export function difficultyOf(a: Analysis): number {
-  const contradiction = a.contradictions.reduce((sum, c) => {
-    const depth = DEPTH_COST[Math.min(c.depth, MAX_CONTRADICTION_DEPTH)] ?? 36;
-    const width = WIDTH_BONUS[c.branchWidth] ?? WIDE_BRANCH_BONUS;
-    return sum + depth + width + c.coverSteps * COVER_IN_CONTRADICTION;
-  }, 0);
+  // 背理法は 1 回ごとに難しさが違うので、まず個別に点数を出す
+  const contradictions = a.contradictions
+    .map((c) => {
+      const depth = DEPTH_COST[Math.min(c.depth, MAX_CONTRADICTION_DEPTH)] ?? 70;
+      const width = WIDTH_MULTIPLIER[c.branchWidth] ?? WIDE_BRANCH_MULTIPLIER;
+      return depth * width + c.coverSteps * COVER_IN_CONTRADICTION;
+    })
+    .sort((x, y) => y - x);
+
+  // 一番難しい 1 回を主役にし、残りは割り引く
+  const contradictionScore = contradictions.reduce(
+    (sum, v, i) => sum + (i === 0 ? v : v * CONTRADICTION_REPEAT_DISCOUNT),
+    0,
+  );
+
   return (
-    a.candidates * DIFFICULTY_WEIGHTS.candidates +
-    a.byCover * DIFFICULTY_WEIGHTS.byCover +
-    a.chainDepth * DIFFICULTY_WEIGHTS.chainDepth +
-    contradiction
+    Math.sqrt(a.candidates) * BREADTH_WEIGHT +
+    a.chainDepth * CHAIN_WEIGHT +
+    techniqueCost(a.byCover, TECHNIQUE_COST.cover) +
+    techniqueCost(a.bySubset, TECHNIQUE_COST.subset) +
+    contradictionScore
   );
 }
 
-/**
- * 表示用の 5 段階。レベル 1〜60 の点数分布を見て区切っている。
- * 遊んで「ちょうどいい」と感じたレベル 15 が 3 になるよう合わせた。
- */
 export function difficultyBand(score: number): 1 | 2 | 3 | 4 | 5 {
   if (score < 36) return 1;
   if (score < 50) return 2;
@@ -684,14 +795,16 @@ export function difficultyBand(score: number): 1 | 2 | 3 | 4 | 5 {
 /**
  * レベルに対する目標難易度。
  *
- * 曲線はレベル 15 が 50 前後になるよう合わせてある。実際に遊んで
- * 「レベル15 くらいがちょうどいい」という感触が得られた点を基準にした。
- * そこから上は背理法つきの問題（1 回で +14）に手が届く高さまで伸ばす。
- * 上限に漸近させ、さらに揺らぎを持たせて「高いほど難しい傾向はあるが
- * 必ずそうとは限らない」形にしている。
+ * 205 に漸近する。立ち上がりを緩やかにしてあるのは、レベル 15 が 55 前後に
+ * 収まるようにするため。実際に遊んで「レベル15 くらいがちょうどいい」という
+ * 感触が得られた点を基準にしている。
+ *
+ *   Lv1:15  Lv15:55  Lv30:88  Lv60:131  Lv100:167  Lv200:198
+ *
+ * 揺らぎを持たせて「高いほど難しい傾向はあるが必ずそうとは限らない」形にしている。
  */
 export function targetDifficulty(level: number, rng: () => number): number {
-  const base = 18 + 55 * (1 - Math.exp(-(level - 1) / 16));
+  const base = 15 + 190 * (1 - Math.exp(-(level - 1) / 60));
   const jitter = 1 + (rng() * 2 - 1) * 0.2;
   return base * jitter;
 }
@@ -868,6 +981,18 @@ interface Candidate {
  * @param tolerance これ以内なら即採用する相対誤差。Infinity なら最初に見つけたものを返す
  * @param easeOff   0〜1。大きいほど作りやすい側のつまみを引く
  */
+/**
+ * 直前の探索の内訳。なぜその盤面が選ばれたのかを追うための診断用。
+ * 候補が 44 個そろっているか、総枠を使い切っていないかをここで確認できる。
+ */
+export const searchStats = {
+  knobDraws: 0,
+  produced: 0,
+  scored: 0,
+  withContradiction: 0,
+  budgetLeft: 0,
+};
+
 function search(
   level: number,
   rng: () => number,
@@ -877,12 +1002,18 @@ function search(
 ): Candidate | null {
   let best: Candidate | null = null;
   let budget = TOTAL_BOARD_ATTEMPTS;
+  let knobDraws = 0;
+  let produced = 0;
+  let scored = 0;
+  let withContradiction = 0;
 
   for (let i = 0; i < KNOB_ATTEMPTS && budget > 0; i++) {
+    knobDraws++;
     const knobs = sampleKnobs(level, rng, easeOff);
     const { raw, used } = tryGenerate(knobs, rng, Math.min(BOARD_ATTEMPTS, budget));
     budget -= used;
     if (!raw) continue;
+    produced++;
 
     const analysis = analyse(raw.n, raw.wall, raw.numbers, raw.candidate);
     // 推測が要る問題は出さない
@@ -890,20 +1021,22 @@ function search(
     // 深すぎる先読みを要求する問題も出さない。解けはするが暗算では追えない。
     if (analysis.maxContradictionDepth > MAX_CONTRADICTION_DEPTH) continue;
 
+    scored++;
+    if (analysis.contradictions.length > 0) withContradiction++;
+
     const candidate: Candidate = { raw, knobs, analysis, score: difficultyOf(analysis) };
     const gap = Math.abs(candidate.score - target);
     if (!best || gap < Math.abs(best.score - target)) best = candidate;
     if (gap <= target * tolerance) break;
   }
 
+  searchStats.knobDraws = knobDraws;
+  searchStats.produced = produced;
+  searchStats.scored = scored;
+  searchStats.withContradiction = withContradiction;
+  searchStats.budgetLeft = budget;
   return best;
 }
-
-/**
- * 最後に作れた盤面。どうしても条件を満たすものが作れなかったときの逃げ道。
- * 遊べない画面を出すよりは、直前の面を作り直して出したほうがまだよい。
- */
-let lastGenerated: Puzzle | null = null;
 
 /**
  * レベルから盤面を作る。同じレベルなら必ず同じ盤面になる。
@@ -914,27 +1047,39 @@ let lastGenerated: Puzzle | null = null;
  *
  * 条件に合う盤面が見つからないことがあるので、段階的に諦める。
  * 無限に探し続けて画面が出ないのが最悪の結果なので、必ずどこかで打ち切る。
+ *
+ * @param reused 段階 4 から再入したときに立てる。二重に逃げないための歯止め。
  */
-export function generateForLevel(level: number): Puzzle {
+export function generateForLevel(level: number, reused = false): Puzzle {
   const rng = mulberry32(level * 7919 + 104729);
   const target = targetDifficulty(level, rng);
 
   // 1. 通常の探索
   let best = search(level, rng, target, CLOSE_ENOUGH, 0);
+  let stage: 1 | 2 | 3 | 4 = 1;
 
   // 2. 目標の許容幅を広げ、つまみも作りやすい側へ寄せて再試行
-  if (!best) best = search(level, rng, target, 0.4, 0.5);
-
-  // 3. 難易度は問わない。とにかく成立する盤面を 1 つ
-  if (!best) best = search(level, rng, target, Number.POSITIVE_INFINITY, 1);
-
   if (!best) {
-    // 4. それでもダメなら直前の盤面を使い回す。番号だけ差し替える。
-    if (lastGenerated) return { ...lastGenerated, level };
-    throw new Error(`レベル ${level} の盤面を生成できませんでした`);
+    best = search(level, rng, target, 0.4, 0.5);
+    stage = 2;
   }
 
-  const puzzle: Puzzle = {
+  // 3. 難易度は問わない。とにかく成立する盤面を 1 つ
+  if (!best) {
+    best = search(level, rng, target, Number.POSITIVE_INFINITY, 1);
+    stage = 3;
+  }
+
+  if (!best) {
+    // 4. 遠く離れたレベルの盤面を作り直して使う。
+    //    直前の面を使い回すと「さっきと同じ」が露骨に分かるので、100 だけ戻る。
+    if (reused) throw new Error(`レベル ${level} の盤面を生成できませんでした`);
+    const donor = level > 100 ? level - 100 : 1;
+    const borrowed = generateForLevel(donor, true);
+    return { ...borrowed, level, stage: 4 };
+  }
+
+  return {
     n: best.raw.n,
     level,
     wall: best.raw.wall,
@@ -944,9 +1089,8 @@ export function generateForLevel(level: number): Puzzle {
     knobs: best.knobs,
     difficulty: best.score,
     analysis: best.analysis,
+    stage,
   };
-  lastGenerated = puzzle;
-  return puzzle;
 }
 
 export interface NumberState {

@@ -5,6 +5,7 @@
 // 作っておけば、「次のレベルへ」を押した瞬間の待ちが消える。
 
 import { generateForLevel, type Puzzle } from './puzzle';
+import { loadPuzzle, savePuzzle } from './puzzleStore';
 import type { WorkerRequest, WorkerResponse } from './puzzleWorker';
 
 const cache = new Map<number, Puzzle>();
@@ -49,12 +50,17 @@ function getWorker(): Worker | null {
 
 /** すでに作ってあればそれを返す。無ければ null（生成はしない）。 */
 export function peekLevel(level: number): Puzzle | null {
-  return cache.get(level) ?? null;
+  const hit = cache.get(level);
+  if (hit) return hit;
+  // 前回までに作ったものが残っていれば、それで待たせずに始められる。
+  const stored = loadPuzzle(level);
+  if (stored) cache.set(level, stored);
+  return stored;
 }
 
 /** レベルの盤面を得る。作成済みなら即座に返る。 */
 export function requestLevel(level: number): Promise<Puzzle> {
-  const hit = cache.get(level);
+  const hit = peekLevel(level);
   if (hit) return Promise.resolve(hit);
 
   const running = inFlight.get(level);
@@ -73,6 +79,7 @@ export function requestLevel(level: number): Promise<Puzzle> {
   const tracked = job.then((puzzle) => {
     cache.set(level, puzzle);
     inFlight.delete(level);
+    savePuzzle(puzzle);
     return puzzle;
   });
 
@@ -86,6 +93,7 @@ export function requestLevel(level: number): Promise<Puzzle> {
  */
 export function prefetchLevel(level: number): void {
   if (cache.has(level) || inFlight.has(level)) return;
+  if (peekLevel(level)) return;
   void requestLevel(level).catch(() => {
     // 先読みは失敗しても構わない。実際に開くときに作り直される。
   });
