@@ -13,11 +13,19 @@ import {
   type GameState,
   type TapResult,
 } from './core/game';
-import { peekLevel, prefetchLevel } from './core/puzzle';
+import { difficultyBand, peekLevel, prefetchLevel } from './core/puzzle';
 import { sfx } from './core/sfx';
 import { Board, type PaintMode } from './ui/Board';
 import { Cat, CAT_NORMAL_SRC } from './ui/Cat';
-import { HelpIcon, HintIcon, LevelsIcon, ResetIcon, SoundIcon, UndoIcon } from './ui/icons';
+import {
+  HelpIcon,
+  HintIcon,
+  LevelsIcon,
+  PawIcon,
+  ResetIcon,
+  SoundIcon,
+  UndoIcon,
+} from './ui/icons';
 
 const STORAGE_KEY = 'nyandoku.maxLevel';
 
@@ -198,6 +206,7 @@ export default function App() {
   // 進み具合は置いた猫の数。正解の匹数が見えるのでヒントにはなる。
   const placed = catCount(state.marks);
   const needed = state.puzzle.solution.length;
+  const band = difficultyBand(state.puzzle.difficulty);
 
   return (
     <div className="app">
@@ -211,7 +220,17 @@ export default function App() {
           </span>
         </span>
 
-        <h1 className="title">レベル {state.level}</h1>
+        <div className="title-block">
+          <h1 className="title">レベル {state.level}</h1>
+          <p className="difficulty" aria-label={`難易度 ${band} / 5`}>
+            <span className="difficulty-label">難易度</span>
+            <span className="difficulty-paws">
+              {[1, 2, 3, 4, 5].map((i) => (
+                <PawIcon key={i} filled={i <= band} />
+              ))}
+            </span>
+          </p>
+        </div>
 
         <div className="header-actions">
           <button

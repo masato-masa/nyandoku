@@ -12,6 +12,21 @@ export function CrossMark() {
   );
 }
 
+/** 難易度表示の肉球。filled が false のときは薄く出す。 */
+export function PawIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg className="paw" viewBox="0 0 24 24" aria-hidden="true">
+      <g fill={filled ? '#B07A86' : '#E4DCD5'}>
+        <ellipse cx="7.6" cy="7.2" rx="2.2" ry="2.9" />
+        <ellipse cx="16.4" cy="7.2" rx="2.2" ry="2.9" />
+        <ellipse cx="3.6" cy="12.6" rx="2" ry="2.5" />
+        <ellipse cx="20.4" cy="12.6" rx="2" ry="2.5" />
+        <path d="M12 11.6 c3.5 0 6.2 2.7 6.2 5.5 c0 2.2 -1.8 3.3 -3.7 3.3 c-1 0 -1.8 -0.4 -2.5 -0.4 s-1.5 0.4 -2.5 0.4 c-1.9 0 -3.7 -1.1 -3.7 -3.3 c0 -2.8 2.7 -5.5 6.2 -5.5 Z" />
+      </g>
+    </svg>
+  );
+}
+
 export function HelpIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">

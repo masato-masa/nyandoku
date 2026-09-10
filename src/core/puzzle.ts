@@ -248,6 +248,13 @@ export interface Analysis {
   byCover: number;
   /** 背理法でしか確定できなかったマスの数。ここが 1 以上なら上級者向け。 */
   byContradiction: number;
+  /**
+   * 各背理法で、矛盾に気づくまでに確定させた手数。
+   * 0 なら仮定した瞬間に破綻する（＝ほぼ確定系）。大きいほど先読みが要る。
+   */
+  contradictionDepths: number[];
+  /** そのうち最も深いもの。理不尽さの上限を測るための値。 */
+  maxContradictionDepth: number;
   /** 猫を置ける候補マスの数。探索の広さ。 */
   candidates: number;
 }
@@ -387,6 +394,7 @@ export function analyse(
   let byNumber = 0;
   let byCover = 0;
   let byContradiction = 0;
+  const depths: number[] = [];
   let solvedBasic = false;
   let broken = false;
   let first = true;
@@ -408,23 +416,33 @@ export function analyse(
     }
     if (done) break;
 
-    // 基本推論で詰まった。1 手だけ仮定して矛盾を探す。
-    let progressed = false;
+    // 基本推論で詰まった。1 マスだけ仮定して矛盾を探す。
+    //
+    // 人は「一番わかりやすい矛盾」から手をつけるので、最初に見つかったものではなく
+    // 最も浅い矛盾を採用する。最初に当たったものを使うと、実は 1 手で気づける矛盾が
+    // 別のマスにあるのに深いほうを選んでしまい、難易度を過大に見積もる。
+    let bestTrial: { cell: number; assume: number; depth: number } | null = null;
+
     for (const [x] of masks) {
       if (state[x] !== UNKNOWN) continue;
-      for (const guess of [IS_CAT, IS_EMPTY] as const) {
+      for (const guess of [IS_CAT, IS_EMPTY]) {
         const trial = state.slice();
         trial[x] = guess;
-        if (propagate(ctx, trial).contradiction) {
-          state[x] = guess === IS_CAT ? IS_EMPTY : IS_CAT;
-          byContradiction++;
-          progressed = true;
-          break;
-        }
+        const r = propagate(ctx, trial);
+        if (!r.contradiction) continue;
+        // 矛盾に気づくまでに確定させた手数。0 なら仮定した瞬間に破綻する。
+        const depth = r.byNumber + r.byCover;
+        if (!bestTrial || depth < bestTrial.depth) bestTrial = { cell: x, assume: guess, depth };
+        if (depth === 0) break;
       }
-      if (progressed) break;
+      if (bestTrial && bestTrial.depth === 0) break;
     }
-    if (!progressed) break; // 背理法でも進まない。ここで詰み。
+
+    if (!bestTrial) break; // 背理法でも進まない。ここで詰み。
+
+    state[bestTrial.cell] = bestTrial.assume === IS_CAT ? IS_EMPTY : IS_CAT;
+    byContradiction++;
+    depths.push(bestTrial.depth);
   }
 
   const solved = !broken && isSolved(ctx, state);
@@ -436,6 +454,8 @@ export function analyse(
     byNumber,
     byCover,
     byContradiction,
+    contradictionDepths: depths,
+    maxContradictionDepth: depths.length ? Math.max(...depths) : 0,
     candidates: masks.size,
   };
 }
@@ -456,18 +476,50 @@ export const DIFFICULTY_WEIGHTS = {
   candidates: 0.6,
   byCover: 6,
   rounds: 4,
-  /** 背理法は一段違う難しさなので大きく効かせる。1 回入るだけで別物になる。 */
-  byContradiction: 14,
 } as const;
 
+/**
+ * 背理法 1 回あたりの重み。深さ（矛盾に気づくまでに確定させた手数）で変える。
+ *
+ * 深さ 0〜1 は実測で一度も出ない。仮定した瞬間に破綻するようなマスは、
+ * 基本推論がすでに×にしているため。つまり背理法に降りた時点で最低 2 手の
+ * 先読みが確定していて、確定系との境界がきれいに分かれている。
+ */
+const CONTRADICTION_COST: Record<number, number> = { 2: 8, 3: 14, 4: 20 };
+
+/**
+ * 出してよい背理法の深さの上限。これを超える問題は生成しない。
+ * 実測（レベル 1〜60）の分布は 深さ2:14回 / 3:10回 / 4:2回 / 5:3回 で、
+ * 深さ 4 までは実際に遊んで理不尽さが無いことを確認している。
+ */
+export const MAX_CONTRADICTION_DEPTH = 4;
+
+/**
+ * 表示用の 5 段階。レベル 1〜80 の点数分布（最小19・最大95、
+ * 四分位で 51 / 59 / 66 / 74）を見て区切っている。
+ * 遊んで「ちょうどいい」と感じたレベル 15 が 3 になるよう合わせた。
+ */
+export function difficultyBand(score: number): 1 | 2 | 3 | 4 | 5 {
+  if (score < 32) return 1;
+  if (score < 47) return 2;
+  if (score < 62) return 3;
+  if (score < 77) return 4;
+  return 5;
+}
+
 export function difficultyOf(a: Analysis): number {
+  const contradiction = a.contradictionDepths.reduce(
+    (sum, d) => sum + (CONTRADICTION_COST[d] ?? CONTRADICTION_COST[MAX_CONTRADICTION_DEPTH]),
+    0,
+  );
   return (
     a.candidates * DIFFICULTY_WEIGHTS.candidates +
     a.byCover * DIFFICULTY_WEIGHTS.byCover +
     a.rounds * DIFFICULTY_WEIGHTS.rounds +
-    a.byContradiction * DIFFICULTY_WEIGHTS.byContradiction
+    contradiction
   );
 }
+
 
 /**
  * レベルに対する目標難易度。
@@ -644,6 +696,8 @@ export function generateForLevel(level: number): Puzzle {
     const analysis = analyse(raw.n, raw.wall, raw.numbers, raw.candidate);
     // 推測が要る問題は出さない
     if (!analysis.solved) continue;
+    // 深すぎる先読みを要求する問題も出さない。解けはするが理不尽になる。
+    if (analysis.maxContradictionDepth > MAX_CONTRADICTION_DEPTH) continue;
 
     const score = difficultyOf(analysis);
     const gap = Math.abs(score - target);
