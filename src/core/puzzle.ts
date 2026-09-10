@@ -724,14 +724,16 @@ function sampleSize(level: number, rng: () => number): number {
  *              密度 0.48 → 被覆推論 1.4 回で 1ms/問。
  * 大きい盤ほど下限を上げて、現実的な時間に収めている。
  */
-function sampleKnobs(level: number, rng: () => number): Knobs {
-  const n = sampleSize(level, rng);
+function sampleKnobs(level: number, rng: () => number, easeOff = 0): Knobs {
+  // easeOff は 0〜1。大きいほど「作りやすい側」に寄せる。
+  // 条件に合う盤面が見つからないときに、諦めながら探すために使う。
+  const n = easeOff >= 1 ? 5 : sampleSize(level, rng);
   // レベルが上がるほど壁と数字を減らせるようにする。手がかりが減るほど
   // 分岐が広がり連鎖も伸びるが、生成コストは跳ね上がる。次のレベルを裏で
   // 先に作っているので、そのぶんの時間は払える。
-  const relax = Math.min(1, (level - 1) / 30);
-  const minDensity = (n >= 8 ? 0.4 : n === 7 ? 0.36 : 0.28) - 0.06 * relax;
-  const minRatio = (n >= 7 ? 0.72 : 0.6) - 0.12 * relax;
+  const relax = Math.min(1, (level - 1) / 30) * (1 - easeOff);
+  const minDensity = (n >= 8 ? 0.4 : n === 7 ? 0.36 : 0.28) - 0.06 * relax + 0.08 * easeOff;
+  const minRatio = (n >= 7 ? 0.72 : 0.6) - 0.12 * relax + 0.25 * easeOff;
 
   // レベルが上がるほど壁を減らす側に寄せる。
   // 壁が少ないほど視線が伸びて連鎖が長くなり、被覆推論が混ざりやすくなる。
@@ -854,27 +856,30 @@ const TOTAL_BOARD_ATTEMPTS = 20000;
  * つけて、そのレベルの目標に一番近いものを選ぶ。おかげで高いレベルでも
  * 小さい盤面が出るし、レベルと難しさは「傾向として」しか結び付かない。
  */
-export function generateForLevel(level: number): Puzzle {
-  const rng = mulberry32(level * 7919 + 104729);
-  const target = targetDifficulty(level, rng);
+interface Candidate {
+  raw: RawPuzzle;
+  knobs: Knobs;
+  analysis: Analysis;
+  score: number;
+}
 
-  type Candidate = { raw: RawPuzzle; knobs: Knobs; analysis: Analysis; score: number };
-
-  // 難易度はレベルが進むにつれて「なんとなく難しくなってきた」と感じられれば十分で、
-  // 特定のレベル以降に特定の解法を必須にするのは難易度ではなくテーマ指定になる。
-  // 背理法を増やしたいなら条件ではなく重みで誘導する。
+/**
+ * つまみを引き直しながら、目標難易度に近い盤面を探す。
+ * @param tolerance これ以内なら即採用する相対誤差。Infinity なら最初に見つけたものを返す
+ * @param easeOff   0〜1。大きいほど作りやすい側のつまみを引く
+ */
+function search(
+  level: number,
+  rng: () => number,
+  target: number,
+  tolerance: number,
+  easeOff: number,
+): Candidate | null {
   let best: Candidate | null = null;
-
-  const closer = (a: Candidate | null, b: Candidate) =>
-    !a || Math.abs(b.score - target) < Math.abs(a.score - target) ? b : a;
-
-  // 総枠。つまみ 1 組あたりの上限だけだと、当たりの悪い組が続いたときに
-  // 最悪 9 秒近くかかることがあった（実測 Lv31 で 8705ms）。時間ではなく
-  // 回数で区切ることで、遅いマシンでも同じ盤面が出る性質を保つ。
   let budget = TOTAL_BOARD_ATTEMPTS;
 
   for (let i = 0; i < KNOB_ATTEMPTS && budget > 0; i++) {
-    const knobs = sampleKnobs(level, rng);
+    const knobs = sampleKnobs(level, rng, easeOff);
     const { raw, used } = tryGenerate(knobs, rng, Math.min(BOARD_ATTEMPTS, budget));
     budget -= used;
     if (!raw) continue;
@@ -886,17 +891,47 @@ export function generateForLevel(level: number): Puzzle {
     if (analysis.maxContradictionDepth > MAX_CONTRADICTION_DEPTH) continue;
 
     const candidate: Candidate = { raw, knobs, analysis, score: difficultyOf(analysis) };
-    best = closer(best, candidate);
-    if (Math.abs(candidate.score - target) <= target * CLOSE_ENOUGH) break;
+    const gap = Math.abs(candidate.score - target);
+    if (!best || gap < Math.abs(best.score - target)) best = candidate;
+    if (gap <= target * tolerance) break;
   }
 
+  return best;
+}
+
+/**
+ * 最後に作れた盤面。どうしても条件を満たすものが作れなかったときの逃げ道。
+ * 遊べない画面を出すよりは、直前の面を作り直して出したほうがまだよい。
+ */
+let lastGenerated: Puzzle | null = null;
+
+/**
+ * レベルから盤面を作る。同じレベルなら必ず同じ盤面になる。
+ *
+ * サイズをレベルから直接決めるのはやめ、複数の軸で作った候補に難易度の点数を
+ * つけて、そのレベルの目標に一番近いものを選ぶ。おかげで高いレベルでも
+ * 小さい盤面が出るし、レベルと難しさは「傾向として」しか結び付かない。
+ *
+ * 条件に合う盤面が見つからないことがあるので、段階的に諦める。
+ * 無限に探し続けて画面が出ないのが最悪の結果なので、必ずどこかで打ち切る。
+ */
+export function generateForLevel(level: number): Puzzle {
+  const rng = mulberry32(level * 7919 + 104729);
+  const target = targetDifficulty(level, rng);
+
+  // 1. 通常の探索
+  let best = search(level, rng, target, CLOSE_ENOUGH, 0);
+
+  // 2. 目標の許容幅を広げ、つまみも作りやすい側へ寄せて再試行
+  if (!best) best = search(level, rng, target, 0.4, 0.5);
+
+  // 3. 難易度は問わない。とにかく成立する盤面を 1 つ
+  if (!best) best = search(level, rng, target, Number.POSITIVE_INFINITY, 1);
+
   if (!best) {
-    // どれも条件を満たさなかった。作りやすい設定で妥協する。
-    const knobs: Knobs = { n: 6, wallDensity: 0.45, numberRatio: 0.9 };
-    const { raw } = tryGenerate(knobs, rng, 4000);
-    if (!raw) throw new Error(`レベル ${level} の盤面を生成できませんでした`);
-    const analysis = analyse(raw.n, raw.wall, raw.numbers, raw.candidate);
-    best = { raw, knobs, analysis, score: difficultyOf(analysis) };
+    // 4. それでもダメなら直前の盤面を使い回す。番号だけ差し替える。
+    if (lastGenerated) return { ...lastGenerated, level };
+    throw new Error(`レベル ${level} の盤面を生成できませんでした`);
   }
 
   const puzzle: Puzzle = {
@@ -910,6 +945,7 @@ export function generateForLevel(level: number): Puzzle {
     difficulty: best.score,
     analysis: best.analysis,
   };
+  lastGenerated = puzzle;
   return puzzle;
 }
 
