@@ -248,8 +248,8 @@ export interface Analysis {
   solvedBasic: boolean;
   /** 基本推論に背理法を足せば解けたか。これを満たさない問題は出さない。 */
   solved: boolean;
-  /** 推論の往復回数。確定の連鎖がどれだけ続くか。 */
-  rounds: number;
+  /** 確定の依存関係の深さ。芋づるが何段続いたか。走査順に依存しない。 */
+  chainDepth: number;
   /** 数字から確定したマスの数。作業量であって難しさではないので重みには入れていない。 */
   byNumber: number;
   /** 被覆推論で確定したマスの数。被覆は 1 回につき 1 マスなので回数と同じ。 */
@@ -281,10 +281,22 @@ interface PropResult {
   /** 確定したマス数。 */
   numberCells: number;
   coverCells: number;
-  /** 推論を適用した回数。連鎖の段数はこの合計。 */
+  /** 推論を適用した回数。 */
   numberSteps: number;
   coverSteps: number;
-  rounds: number;
+  /**
+   * 確定の連鎖が何段続いたか。
+   *
+   * 「今わかっていることだけから導けるものを全部集めて、まとめて確定させる」を
+   * 1 段として数える。1 段の中では互いの結果を参照しないので、壁を見る順番を
+   * 変えても値が変わらない。
+   *
+   * 当初は「盤面を何周スキャンしたか」で代用し、次に「確定した順に深さを振る」
+   * 方式を試したが、どちらも走査順で値が変わった（壁を見る順を逆にしただけで
+   * 25 面中 14〜17 面で数字が動いた）。パズルの性質ではなく実装の都合を
+   * 測ってしまっていたことになる。
+   */
+  levels: number;
 }
 
 function seenFrom(ctx: Ctx, state: Uint8Array): Uint8Array {
@@ -308,15 +320,15 @@ function seenFrom(ctx: Ctx, state: Uint8Array): Uint8Array {
  *           そのマスから 4 方向へ壁まで辿る必要があり、しかも「どの空きマスが
  *           危ないか」を自分で見つけないと始まらない。探索の起点が無いぶん重い。
  *
- * マス数と段数を別々に数えている。数字推論は 1 回で複数マスを確定させるので、
- * マス数は「波及の広さ」、段数は「読む手数」になり、意味が違う。
+ * 1 段ぶんの推論を全部集めてからまとめて適用する。段の途中で状態を書き換えると
+ * 「先に見た壁の結果を後の壁が使う」ことになり、走査順で結果が変わってしまう。
  */
 function propagate(ctx: Ctx, state: Uint8Array): PropResult {
-  let rounds = 0;
   let numberCells = 0;
   let coverCells = 0;
   let numberSteps = 0;
   let coverSteps = 0;
+  let levels = 0;
 
   const result = (contradiction: boolean): PropResult => ({
     contradiction,
@@ -324,12 +336,22 @@ function propagate(ctx: Ctx, state: Uint8Array): PropResult {
     coverCells,
     numberSteps,
     coverSteps,
-    rounds,
+    levels,
   });
 
   for (;;) {
-    let changed = false;
-    rounds++;
+    // この段で導ける結論を、状態を書き換えずに全部集める
+    const pending = new Map<number, number>();
+    let conflict = false;
+    let nSteps = 0;
+    let cSteps = 0;
+
+    const propose = (cell: number, value: number): void => {
+      const prev = pending.get(cell);
+      // 同じ段で正反対の結論が出たら、その仮定は破綻している
+      if (prev !== undefined && prev !== value) conflict = true;
+      else pending.set(cell, value);
+    };
 
     for (const w of ctx.numberedWalls) {
       const want = ctx.numbers[w];
@@ -337,24 +359,22 @@ function propagate(ctx: Ctx, state: Uint8Array): PropResult {
       let cats = 0;
       const unknown: number[] = [];
       for (const c of cells) {
-        if (state[c] === IS_CAT) cats++;
-        else if (state[c] === UNKNOWN) unknown.push(c);
+        if (state[c] === UNKNOWN) unknown.push(c);
+        else if (state[c] === IS_CAT) cats++;
       }
       if (cats > want) return result(true);
       if (cats + unknown.length < want) return result(true);
       if (unknown.length === 0) continue;
+
       if (cats === want) {
-        for (const c of unknown) state[c] = IS_EMPTY;
-        numberCells += unknown.length;
-        numberSteps++;
-        changed = true;
+        for (const c of unknown) propose(c, IS_EMPTY);
+        nSteps++;
       } else if (cats + unknown.length === want) {
-        for (const c of unknown) state[c] = IS_CAT;
-        numberCells += unknown.length;
-        numberSteps++;
-        changed = true;
+        for (const c of unknown) propose(c, IS_CAT);
+        nSteps++;
       }
     }
+    if (conflict) return result(true);
 
     const seen = seenFrom(ctx, state);
     for (let c = 0; c < ctx.size; c++) {
@@ -369,16 +389,34 @@ function propagate(ctx: Ctx, state: Uint8Array): PropResult {
       }
       if (count === 0) return result(true);
       if (count === 1 && state[only] === UNKNOWN) {
-        state[only] = IS_CAT;
-        coverCells++;
-        coverSteps++;
-        changed = true;
+        propose(only, IS_CAT);
+        cSteps++;
       }
     }
+    if (conflict) return result(true);
 
-    if (!changed) return result(false);
+    // 実際に変わるものだけ残す
+    let applied = 0;
+    for (const [cell, value] of pending) {
+      if (state[cell] !== UNKNOWN) continue;
+      state[cell] = value;
+      applied++;
+    }
+    if (applied === 0) return result(false);
+
+    // 内訳は段ごとの推論回数の比で按分する。厳密な帰属は取れないが、
+    // 数字と被覆のどちらが主役だったかを見るには足りる。
+    if (nSteps + cSteps > 0) {
+      const share = cSteps / (nSteps + cSteps);
+      coverCells += Math.round(applied * share);
+      numberCells += applied - Math.round(applied * share);
+    }
+    numberSteps += nSteps;
+    coverSteps += cSteps;
+    levels++;
+
     // 念のための安全弁。通常ここには達しない。
-    if (rounds > 200) return result(false);
+    if (levels > 200) return result(false);
   }
 }
 
@@ -422,7 +460,7 @@ export function analyse(
   // 猫を置けないマスは最初から空で確定している
   for (let i = 0; i < size; i++) if (!wall[i] && !candidate[i]) state[i] = IS_EMPTY;
 
-  let rounds = 0;
+  let chainDepth = 0;
   let byNumber = 0;
   let byCover = 0;
   const contradictions: ContradictionStep[] = [];
@@ -432,7 +470,7 @@ export function analyse(
 
   for (;;) {
     const r = propagate(ctx, state);
-    rounds += r.rounds;
+    if (r.levels > chainDepth) chainDepth = r.levels;
     byNumber += r.numberCells;
     byCover += r.coverCells;
     if (r.contradiction) {
@@ -461,11 +499,11 @@ export function analyse(
         trial[x] = guess;
         const probe = propagate(ctx, trial);
         if (!probe.contradiction) continue;
-        const depth = probe.numberSteps + probe.coverSteps;
-        if (!best || depth < best.depth) {
-          best = { cell: x, assume: guess, depth, coverSteps: probe.coverSteps };
+        const steps = probe.levels;
+        if (!best || steps < best.depth) {
+          best = { cell: x, assume: guess, depth: steps, coverSteps: probe.coverSteps };
         }
-        if (depth <= 1) break;
+        if (steps <= 1) break;
       }
       if (best && best.depth <= 1) break;
     }
@@ -481,7 +519,7 @@ export function analyse(
   return {
     solvedBasic: solvedBasic && solved,
     solved,
-    rounds,
+    chainDepth,
     byNumber,
     byCover,
     contradictions,
@@ -498,7 +536,7 @@ export function analyse(
  * 実測での各指標の幅（論理で解ける問題のみ）:
  *   candidates  9 〜 33    盤面サイズと壁密度で動く。探索の広さ
  *   byCover     0 〜 5     壁密度を下げると増える。視野で考える場面の多さ
- *   rounds      2 〜 6     確定の連鎖の長さ
+ *   chainDepth  1 〜 ?     確定の依存関係の深さ。芋づるが何段続いたか
  *
  * candidates を重くするとサイズがそのまま難易度になり、高いレベルに大きい盤しか
  * 出なくなる。推論の深さ（byCover と rounds）を重くすることで、小さい盤でも
@@ -506,9 +544,9 @@ export function analyse(
  * 数字推論の回数は入れていない。作業量であって難しさではないため。
  */
 export const DIFFICULTY_WEIGHTS = {
-  candidates: 0.6,
-  byCover: 6,
-  rounds: 4,
+  candidates: 0.35,
+  byCover: 4,
+  chainDepth: 3.5,
 } as const;
 
 /**
@@ -516,8 +554,13 @@ export const DIFFICULTY_WEIGHTS = {
  *
  * 中に被覆推論が混ざるとさらに重い。数字を追っていた頭を「このマスは誰が見るのか」
  * という別の視点に切り替えさせられるため、段数が同じでも体感が違う。
+ *
+ * 背理法以外の重みより意図的に大きくしてある。高いレベルで背理法を増やしたいとき、
+ * 「レベル N 以上は背理法必須」と条件で縛るのは難易度ではなくテーマ指定になる。
+ * 他の要素だけでは目標点に届きにくくしておけば、選択器が自然と背理法つきの
+ * 盤面を選ぶ。
  */
-const CONTRADICTION_STEP_COST: Record<number, number> = { 0: 4, 1: 8, 2: 14, 3: 20, 4: 26 };
+const CONTRADICTION_STEP_COST: Record<number, number> = { 0: 8, 1: 14, 2: 22, 3: 30, 4: 38 };
 const COVER_IN_CONTRADICTION = 5;
 
 /**
@@ -537,16 +580,16 @@ export function difficultyOf(a: Analysis): number {
   return (
     a.candidates * DIFFICULTY_WEIGHTS.candidates +
     a.byCover * DIFFICULTY_WEIGHTS.byCover +
-    a.rounds * DIFFICULTY_WEIGHTS.rounds +
+    a.chainDepth * DIFFICULTY_WEIGHTS.chainDepth +
     contradiction
   );
 }
 
 export function difficultyBand(score: number): 1 | 2 | 3 | 4 | 5 {
   if (score < 38) return 1;
-  if (score < 53) return 2;
-  if (score < 66) return 3;
-  if (score < 80) return 4;
+  if (score < 52) return 2;
+  if (score < 64) return 3;
+  if (score < 76) return 4;
   return 5;
 }
 
@@ -686,9 +729,6 @@ function tryGenerate(knobs: Knobs, rng: () => number, attempts: number): RawPuzz
   return null;
 }
 
-/** 目標をこれ以上超える候補は採らない。難易度の並びが壊れるほうが害が大きい。 */
-const OVERSHOOT_LIMIT = 1.4;
-
 /**
  * 目標難易度にどれだけ近ければ十分とみなすか。
  * 厳しくすると狙いは正確になるが、条件に合う盤面を探し続けて生成が遅くなる。
@@ -729,13 +769,10 @@ export function generateForLevel(level: number): Puzzle {
 
   type Candidate = { raw: RawPuzzle; knobs: Knobs; analysis: Analysis; score: number };
 
-  // 高いレベルでは先読みを必須にする。
-  // 点数で誘導しようとしても、難易度は盤面の広さと被覆推論だけで目標に届いてしまうため、
-  // 選択器が深い連鎖を選ぶ理由が生まれなかった。条件として課すほうが確実。
-  const requiredDepth = level >= 35 ? 2 : level >= 18 ? 1 : 0;
-
-  let best: Candidate | null = null; // 条件を満たすもののうち目標に近い
-  let fallback: Candidate | null = null; // 条件を満たすものが無かったとき用
+  // 難易度はレベルが進むにつれて「なんとなく難しくなってきた」と感じられれば十分で、
+  // 特定のレベル以降に特定の解法を必須にするのは難易度ではなくテーマ指定になる。
+  // 背理法を増やしたいなら条件ではなく重みで誘導する。
+  let best: Candidate | null = null;
 
   const closer = (a: Candidate | null, b: Candidate) =>
     !a || Math.abs(b.score - target) < Math.abs(a.score - target) ? b : a;
@@ -752,17 +789,9 @@ export function generateForLevel(level: number): Puzzle {
     if (analysis.maxContradictionDepth > MAX_CONTRADICTION_DEPTH) continue;
 
     const candidate: Candidate = { raw, knobs, analysis, score: difficultyOf(analysis) };
-    fallback = closer(fallback, candidate);
-
-    if (analysis.maxContradictionDepth < requiredDepth) continue;
-    // 条件を満たしていても、目標を大きく超える problem は帯から外れて浮くだけなので採らない。
-    // 先読みのある面より、難易度の並びが壊れないことを優先する。
-    if (candidate.score > target * OVERSHOOT_LIMIT) continue;
     best = closer(best, candidate);
     if (Math.abs(candidate.score - target) <= target * CLOSE_ENOUGH) break;
   }
-
-  best = best ?? fallback;
 
   if (!best) {
     // どれも条件を満たさなかった。作りやすい設定で妥協する。
