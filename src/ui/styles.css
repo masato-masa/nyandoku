@@ -75,8 +75,14 @@ body {
   min-height: 32px;
 }
 
-.progress {
+.header-left {
   justify-self: start;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.progress {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -296,6 +302,116 @@ body {
 .tool svg {
   width: 40px;
   height: 40px;
+}
+
+/* ---- ホーム画面 ---- */
+/* 構成は cat-maze の home.ts / menu.css を踏襲。色と角丸はにゃんどく側の
+   実測値をそのまま使う（茶系パレットを持ち込むと盤面と喧嘩する）。 */
+.app-home {
+  justify-content: center;
+  gap: 0;
+}
+
+.home {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  width: min(100%, 320px);
+}
+
+.home-art {
+  width: 132px;
+  height: 132px;
+  display: grid;
+  place-items: center;
+}
+
+.home-cat-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.home-title {
+  margin: 6px 0 0;
+  font-size: 36px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--title);
+}
+
+.home-sub {
+  margin: 6px 0 28px;
+  font-size: 14px;
+  color: #a99089;
+}
+
+.home-buttons {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+}
+
+.home-btn {
+  border: 0;
+  border-radius: 999px;
+  padding: 15px 24px;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--title);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+  cursor: pointer;
+  transition: transform 0.15s var(--ease), background-color 0.15s var(--ease);
+}
+
+.home-btn:active {
+  transform: scale(0.96);
+}
+
+.home-btn.primary {
+  color: #fff;
+  background: #9179d1;
+  padding: 14px 24px;
+}
+
+.home-btn.primary:hover {
+  background: #8168c8;
+}
+
+/* 「つづきから」の行き先を見せる。ボタンの高さは 1 行のときと揃える。 */
+.home-btn-level {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.home-clear {
+  margin-top: 24px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: #a99089;
+  cursor: pointer;
+  padding: 6px 12px;
+}
+
+/* クリア演出は全画面を覆うので、ここにもホームへの出口を置く。 */
+.banner-link {
+  margin-top: 10px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: #a99089;
+  cursor: pointer;
+  padding: 4px 12px;
 }
 
 /* ---- 結果表示 ---- */

@@ -18,15 +18,9 @@ import { peekLevel, prefetchLevel, requestLevel } from './core/puzzleClient';
 import { sfx } from './core/sfx';
 import { Board, type PaintMode } from './ui/Board';
 import { Cat, CAT_NORMAL_SRC } from './ui/Cat';
-import {
-  HelpIcon,
-  HintIcon,
-  LevelsIcon,
-  PawIcon,
-  ResetIcon,
-  SoundIcon,
-  UndoIcon,
-} from './ui/icons';
+import { Home } from './ui/Home';
+import { HelpSheet, LevelSheet, Overlay } from './ui/Sheets';
+import { BackIcon, HelpIcon, HintIcon, PawIcon, ResetIcon, UndoIcon } from './ui/icons';
 
 const STORAGE_KEY = 'nyandoku.maxLevel';
 
@@ -51,20 +45,22 @@ function saveMaxLevel(v: number): void {
   }
 }
 
-/** ?level=12 のように指定すると、その面から始められる。動作確認用。 */
-function initialLevel(): number {
+/** ?level=12 のように指定すると、ホームを飛ばしてその面から始まる。動作確認用。 */
+function levelFromQuery(): number | null {
   const raw = new URLSearchParams(window.location.search).get('level');
-  const n = raw ? Number.parseInt(raw, 10) : 1;
-  return Number.isFinite(n) && n >= 1 ? n : 1;
+  if (!raw) return null;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 1 ? n : null;
 }
 
+type Screen = 'home' | 'play';
 type Sheet = 'none' | 'help' | 'levels';
 
 export default function App() {
   const [state, setState] = useState<GameState | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [maxLevel, setMaxLevel] = useState(() => Math.max(loadMaxLevel(), initialLevel()));
-  const [muted, setMuted] = useState(false);
+  const [screen, setScreen] = useState<Screen>(() => (levelFromQuery() ? 'play' : 'home'));
+  const [loading, setLoading] = useState(false);
+  const [maxLevel, setMaxLevel] = useState(() => Math.max(loadMaxLevel(), levelFromQuery() ?? 1));
   const [sheet, setSheet] = useState<Sheet>('none');
   const crossStep = useRef(0);
 
@@ -72,6 +68,7 @@ export default function App() {
 
   const goToLevel = useCallback((level: number) => {
     setSheet('none');
+    setScreen('play');
     setMaxLevel((m) => {
       const next = Math.max(m, level);
       if (next !== m) saveMaxLevel(next);
@@ -98,10 +95,17 @@ export default function App() {
     void requestLevel(level).then((puzzle) => start(createGameFrom(puzzle)));
   }, []);
 
-  // 最初の 1 面。ここも生成に時間がかかるのでローディングを挟む。
+  // ?level= が付いていれば、その面から直接始める。
   useEffect(() => {
-    goToLevel(initialLevel());
+    const q = levelFromQuery();
+    if (q) goToLevel(q);
   }, [goToLevel]);
+
+  // ホームを見ている間に「つづきから」の面を作っておく。ここで先に作れていれば、
+  // ボタンを押した瞬間に盤面が出る（起動直後のローディングが消える）。
+  useEffect(() => {
+    if (screen === 'home') prefetchLevel(maxLevel);
+  }, [screen, maxLevel]);
 
   /** 状態の更新と、その手に応じた音・触覚をまとめて扱う唯一の入り口。 */
   const apply = useCallback((result: TapResult) => {
@@ -178,13 +182,42 @@ export default function App() {
     if (state) apply(hint(state));
   }, [apply, state]);
 
-  const toggleSound = useCallback(() => {
-    setMuted((m) => {
-      sfx.setMuted(!m);
-      if (m) sfx.cross(0);
-      return !m;
-    });
+  const goHome = useCallback(() => {
+    setSheet('none');
+    setScreen('home');
   }, []);
+
+  const clearProgress = useCallback(() => {
+    if (!window.confirm('きろくを ぜんぶ けしますか？')) return;
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      /* 消せなくても画面上は 1 に戻す */
+    }
+    setMaxLevel(1);
+    setState(null);
+  }, []);
+
+  if (screen === 'home') {
+    return (
+      <div className="app app-home">
+        <Home
+          maxLevel={maxLevel}
+          onResume={() => goToLevel(maxLevel)}
+          onOpenLevels={() => setSheet('levels')}
+          onOpenHelp={() => setSheet('help')}
+          onClearProgress={clearProgress}
+        />
+
+        <AnimatePresence>
+          {sheet === 'help' && <HelpSheet onClose={() => setSheet('none')} />}
+          {sheet === 'levels' && (
+            <LevelSheet max={maxLevel} onPick={goToLevel} onClose={() => setSheet('none')} />
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  }
 
   if (loading || !state || !derived) return <LoadingScreen />;
 
@@ -196,14 +229,19 @@ export default function App() {
   return (
     <div className="app">
       <header className="header">
-        <span className="progress">
-          <img className="progress-cat" src={CAT_NORMAL_SRC} alt="" draggable={false} />
-          <span className="progress-count">
-            <span className="progress-now">{placed}</span>
-            <span className="progress-slash">/</span>
-            <span className="progress-total">{needed}</span>
+        <div className="header-left">
+          <button className="icon-btn" type="button" onClick={goHome} aria-label="ホームへ戻る">
+            <BackIcon />
+          </button>
+          <span className="progress">
+            <img className="progress-cat" src={CAT_NORMAL_SRC} alt="" draggable={false} />
+            <span className="progress-count">
+              <span className="progress-now">{placed}</span>
+              <span className="progress-slash">/</span>
+              <span className="progress-total">{needed}</span>
+            </span>
           </span>
-        </span>
+        </div>
 
         <div className="title-block">
           <h1 className="title">レベル {state.level}</h1>
@@ -225,23 +263,6 @@ export default function App() {
             aria-label="遊びかた"
           >
             <HelpIcon />
-          </button>
-          <button
-            className="icon-btn"
-            type="button"
-            onClick={() => setSheet('levels')}
-            aria-label="レベルを選ぶ"
-          >
-            <LevelsIcon />
-          </button>
-          <button
-            className="icon-btn"
-            type="button"
-            data-off={muted}
-            onClick={toggleSound}
-            aria-label={muted ? '音を出す' : '音を消す'}
-          >
-            <SoundIcon muted={muted} />
           </button>
         </div>
       </header>
@@ -320,6 +341,9 @@ export default function App() {
               >
                 次のレベルへ
               </button>
+              <button className="banner-link" type="button" onClick={goHome}>
+                ホームへ
+              </button>
             </motion.div>
           </Overlay>
         )}
@@ -340,123 +364,5 @@ function LoadingScreen() {
       </motion.div>
       <p className="loading-text">準備中…</p>
     </div>
-  );
-}
-
-function Overlay({ children, onClose }: { children: React.ReactNode; onClose?: () => void }) {
-  return (
-    <motion.div
-      className="banner"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1, pointerEvents: 'auto' }}
-      // 閉じるアニメーションの間もオーバーレイが残っているので、
-      // ここで当たり判定を切らないと、その 0.2 秒に押したボタンが反応しない。
-      exit={{ opacity: 0, pointerEvents: 'none' }}
-      transition={{ duration: 0.2 }}
-      onPointerDown={(e) => {
-        if (onClose && e.target === e.currentTarget) onClose();
-      }}
-    >
-      {children}
-    </motion.div>
-  );
-}
-
-const HELP_RULES = [
-  '数字は、その壁のまわり 8 マスにいる猫の数です。',
-  '猫は、数字が書かれた壁のとなりにだけ置けます。',
-  '猫は、自分のまわり 8 マスと、上下左右をまっすぐ（壁にぶつかるまで）見わたせます。',
-  '壁以外のマスをすべて猫の視界に入れるとクリアです。',
-];
-
-const HELP_CONTROLS = [
-  'タップするたび ×（置かない印）→ 猫 → 空 と切りかわります。',
-  'なぞると × をまとめて付けられます。× から始めると消しゴムになります。',
-];
-
-function HelpSheet({ onClose }: { onClose: () => void }) {
-  return (
-    <Overlay key="help" onClose={onClose}>
-      <motion.div
-        className="sheet"
-        initial={{ scale: 0.9, y: 18 }}
-        animate={{ scale: 1, y: 0 }}
-        exit={{ scale: 0.94, opacity: 0 }}
-        transition={{ type: 'spring', stiffness: 420, damping: 28 }}
-      >
-        <h2 className="sheet-title">遊びかた</h2>
-
-        <ul className="help-list">
-          {HELP_RULES.map((r) => (
-            <li key={r}>{r}</li>
-          ))}
-        </ul>
-
-        <h3 className="sheet-subtitle">操作</h3>
-        <ul className="help-list">
-          {HELP_CONTROLS.map((r) => (
-            <li key={r}>{r}</li>
-          ))}
-        </ul>
-
-        <button className="banner-btn" type="button" onClick={onClose}>
-          とじる
-        </button>
-      </motion.div>
-    </Overlay>
-  );
-}
-
-interface LevelSheetProps {
-  current: number;
-  max: number;
-  onPick: (level: number) => void;
-  onClose: () => void;
-}
-
-function LevelSheet({ current, max, onPick, onClose }: LevelSheetProps) {
-  const listRef = useRef<HTMLDivElement>(null);
-
-  // 今いるレベルが見える位置で開く。一覧が伸びてくると、開いた瞬間に
-  // 自分がどこにいるか分からなくなるため。
-  useEffect(() => {
-    listRef.current?.querySelector('[data-current="true"]')?.scrollIntoView({ block: 'center' });
-  }, []);
-
-  // 下から上に 1 → 最新 と並べたいので、描画は大きい番号から。
-  const levels = Array.from({ length: max }, (_, i) => max - i);
-
-  return (
-    <Overlay key="levels" onClose={onClose}>
-      <motion.div
-        className="sheet sheet-levels"
-        initial={{ scale: 0.9, y: 18 }}
-        animate={{ scale: 1, y: 0 }}
-        exit={{ scale: 0.94, opacity: 0 }}
-        transition={{ type: 'spring', stiffness: 420, damping: 28 }}
-      >
-        <h2 className="sheet-title">レベル</h2>
-
-        <div className="level-list" ref={listRef}>
-          {levels.map((lv) => (
-            <button
-              key={lv}
-              type="button"
-              className="level-row"
-              data-current={lv === current}
-              data-cleared={lv < max}
-              onClick={() => onPick(lv)}
-            >
-              <span className="level-no">{lv}</span>
-              {lv < max && <img className="level-cat" src={CAT_NORMAL_SRC} alt="" />}
-            </button>
-          ))}
-        </div>
-
-        <button className="banner-btn" type="button" onClick={onClose}>
-          とじる
-        </button>
-      </motion.div>
-    </Overlay>
   );
 }

@@ -43,36 +43,19 @@ export function HelpIcon() {
   );
 }
 
-export function LevelsIcon() {
+/** ホームへ戻る。ヘッダー左端に置くので、他の丸アイコンと同じ地に合わせる。 */
+export function BackIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
       <circle cx="12" cy="12" r="9.4" fill="#9179D1" />
-      <g fill="#fff">
-        <rect x="7" y="7.6" width="10" height="2.1" rx="1.05" />
-        <rect x="7" y="10.95" width="10" height="2.1" rx="1.05" />
-        <rect x="7" y="14.3" width="6.4" height="2.1" rx="1.05" />
-      </g>
-    </svg>
-  );
-}
-
-/** 音の入切。歯車だと設定画面と誤解されるので、スピーカーで意味を出す。 */
-export function SoundIcon({ muted }: { muted: boolean }) {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="9.4" fill="#9179D1" />
-      <path d="M7 10.4 h2.2 L12.4 7.6 v8.8 L9.2 13.6 H7 Z" fill="#fff" />
-      {muted ? (
-        <g stroke="#fff" strokeWidth="1.7" strokeLinecap="round">
-          <path d="M14.4 10.2 L17.4 13.8" />
-          <path d="M17.4 10.2 L14.4 13.8" />
-        </g>
-      ) : (
-        <g fill="none" stroke="#fff" strokeWidth="1.7" strokeLinecap="round">
-          <path d="M14.6 10 a3 3 0 0 1 0 4" />
-          <path d="M16.6 8.4 a5.6 5.6 0 0 1 0 7.2" />
-        </g>
-      )}
+      <path
+        d="M13.6 7.8 L9.4 12 l4.2 4.2"
+        fill="none"
+        stroke="#fff"
+        strokeWidth="2.1"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
