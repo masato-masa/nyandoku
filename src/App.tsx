@@ -19,8 +19,16 @@ import { sfx } from './core/sfx';
 import { Board, type PaintMode } from './ui/Board';
 import { Cat, CAT_NORMAL_SRC } from './ui/Cat';
 import { Home } from './ui/Home';
-import { HelpSheet, LevelSheet, Overlay } from './ui/Sheets';
-import { BackIcon, HelpIcon, HintIcon, PawIcon, ResetIcon, UndoIcon } from './ui/icons';
+import { DevSheet, HelpSheet, LevelSheet, Overlay, SettingsSheet } from './ui/Sheets';
+import {
+  BackIcon,
+  GearIcon,
+  HelpIcon,
+  HintIcon,
+  PawIcon,
+  ResetIcon,
+  UndoIcon,
+} from './ui/icons';
 
 const STORAGE_KEY = 'nyandoku.maxLevel';
 
@@ -60,7 +68,7 @@ function levelFromQuery(): number | null {
 }
 
 type Screen = 'home' | 'play';
-type Sheet = 'none' | 'help' | 'levels';
+type Sheet = 'none' | 'help' | 'levels' | 'settings' | 'dev';
 
 export default function App() {
   const [state, setState] = useState<GameState | null>(null);
@@ -68,6 +76,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [maxLevel, setMaxLevel] = useState(() => Math.max(loadMaxLevel(), levelFromQuery() ?? 1));
   const [sheet, setSheet] = useState<Sheet>('none');
+  const [muted, setMutedState] = useState(() => sfx.isMuted());
   const crossStep = useRef(0);
 
   const derived = useMemo(() => (state ? derive(state) : null), [state]);
@@ -210,7 +219,41 @@ export default function App() {
     }
     setMaxLevel(1);
     setState(null);
+    setSheet('none');
+    setScreen('home');
   }, []);
+
+  const toggleMute = useCallback(() => {
+    setMutedState((m) => {
+      const next = !m;
+      sfx.setMuted(next);
+      // 音を戻した合図として 1 音鳴らす。無音のまま戻ると効いたか分からない。
+      if (!next) {
+        sfx.unlock();
+        sfx.cat(0);
+      }
+      return next;
+    });
+  }, []);
+
+  /**
+   * ホームとプレイのどちらからも同じ形で出すシート。
+   *
+   * AnimatePresence は子を React.Children で数えるので、ここを Fragment で
+   * まとめて渡すと中身が見えず、シートが一切出なくなる。配列で返して
+   * それぞれに key を持たせる。
+   */
+  const commonSheets = [
+    sheet === 'help' && <HelpSheet key="help" onClose={() => setSheet('none')} />,
+    sheet === 'settings' && (
+      <SettingsSheet
+        key="settings"
+        muted={muted}
+        onToggleMute={toggleMute}
+        onClose={() => setSheet('none')}
+      />
+    ),
+  ];
 
   if (screen === 'home') {
     return (
@@ -219,14 +262,22 @@ export default function App() {
           maxLevel={maxLevel}
           onResume={() => goToLevel(maxLevel)}
           onOpenLevels={() => setSheet('levels')}
-          onOpenHelp={() => setSheet('help')}
-          onClearProgress={clearProgress}
+          onOpenSettings={() => setSheet('settings')}
+          onOpenDev={() => setSheet('dev')}
         />
 
         <AnimatePresence>
-          {sheet === 'help' && <HelpSheet onClose={() => setSheet('none')} />}
+          {commonSheets}
           {sheet === 'levels' && (
             <LevelSheet max={maxLevel} onPick={goToLevel} onClose={() => setSheet('none')} />
+          )}
+          {sheet === 'dev' && (
+            <DevSheet
+              maxLevel={maxLevel}
+              onJump={goToLevel}
+              onClearProgress={clearProgress}
+              onClose={() => setSheet('none')}
+            />
           )}
         </AnimatePresence>
       </div>
@@ -242,42 +293,53 @@ export default function App() {
 
   return (
     <div className="app">
+      {/* 行 1 はナビゲーションだけ。カウントと難易度は必ず行 2 に置く。 */}
       <header className="header">
-        <div className="header-left">
-          <button className="icon-btn" type="button" onClick={goHome} aria-label="ホームへ戻る">
-            <BackIcon />
-          </button>
-          <span className="progress">
-            <img className="progress-cat" src={CAT_NORMAL_SRC} alt="" draggable={false} />
-            <span className="progress-count">
-              <span className="progress-now">{placed}</span>
-              <span className="progress-slash">/</span>
-              <span className="progress-total">{needed}</span>
-            </span>
-          </span>
+        <div className="header-row">
+          <div className="header-left">
+            <button className="icon-btn" type="button" onClick={goHome} aria-label="ホームへ戻る">
+              <BackIcon />
+            </button>
+          </div>
+
+          <h1 className="title">レベル {state.level}</h1>
+
+          <div className="header-actions">
+            <button
+              className="icon-btn"
+              type="button"
+              onClick={() => setSheet('settings')}
+              aria-label="設定"
+            >
+              <GearIcon />
+            </button>
+            <button
+              className="icon-btn"
+              type="button"
+              onClick={() => setSheet('help')}
+              aria-label="遊びかた"
+            >
+              <HelpIcon />
+            </button>
+          </div>
         </div>
 
-        <div className="title-block">
-          <h1 className="title">レベル {state.level}</h1>
-          <p className="difficulty" aria-label={`難易度 ${band} / 5`}>
-            <span className="difficulty-label">難易度</span>
+        <div className="status-bar">
+          <span className="stat">
+            <img className="stat-cat" src={CAT_NORMAL_SRC} alt="" draggable={false} />
+            <span className="stat-num stat-now">{placed}</span>
+            <span className="stat-slash">/</span>
+            <span className="stat-num stat-total">{needed}</span>
+          </span>
+
+          <span className="stat" aria-label={`難易度 ${band} / 5`}>
+            <span className="stat-label">難易度</span>
             <span className="difficulty-paws">
               {[1, 2, 3, 4, 5].map((i) => (
                 <PawIcon key={i} filled={i <= band} />
               ))}
             </span>
-          </p>
-        </div>
-
-        <div className="header-actions">
-          <button
-            className="icon-btn"
-            type="button"
-            onClick={() => setSheet('help')}
-            aria-label="遊びかた"
-          >
-            <HelpIcon />
-          </button>
+          </span>
         </div>
       </header>
 
@@ -316,7 +378,7 @@ export default function App() {
       </main>
 
       <AnimatePresence>
-        {sheet === 'help' && <HelpSheet onClose={() => setSheet('none')} />}
+        {commonSheets}
         {sheet === 'levels' && (
           <LevelSheet
             current={state.level}
@@ -349,13 +411,13 @@ export default function App() {
                 {state.hintsUsed > 0 ? ` · ヒント ${state.hintsUsed} 回` : ''}
               </p>
               <button
-                className="banner-btn"
+                className="sheet-btn"
                 type="button"
                 onClick={() => goToLevel(state.level + 1)}
               >
                 次のレベルへ
               </button>
-              <button className="banner-link" type="button" onClick={goHome}>
+              <button className="sheet-link" type="button" onClick={goHome}>
                 ホームへ
               </button>
             </motion.div>

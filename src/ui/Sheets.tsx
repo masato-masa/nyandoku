@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { CAT_NORMAL_SRC } from './Cat';
 
@@ -12,7 +12,7 @@ export function Overlay({
 }) {
   return (
     <motion.div
-      className="banner"
+      className="overlay"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1, pointerEvents: 'auto' }}
       // 閉じるアニメーションの間もオーバーレイが残っているので、
@@ -22,6 +22,21 @@ export function Overlay({
       onPointerDown={(e) => {
         if (onClose && e.target === e.currentTarget) onClose();
       }}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
+/** シートの中身。どのシートも同じバネで出入りする。 */
+function Sheet({ className, children }: { className?: string; children: React.ReactNode }) {
+  return (
+    <motion.div
+      className={className ? `sheet ${className}` : 'sheet'}
+      initial={{ scale: 0.9, y: 18 }}
+      animate={{ scale: 1, y: 0 }}
+      exit={{ scale: 0.94, opacity: 0 }}
+      transition={{ type: 'spring', stiffness: 420, damping: 28 }}
     >
       {children}
     </motion.div>
@@ -43,13 +58,7 @@ const HELP_CONTROLS = [
 export function HelpSheet({ onClose }: { onClose: () => void }) {
   return (
     <Overlay key="help" onClose={onClose}>
-      <motion.div
-        className="sheet"
-        initial={{ scale: 0.9, y: 18 }}
-        animate={{ scale: 1, y: 0 }}
-        exit={{ scale: 0.94, opacity: 0 }}
-        transition={{ type: 'spring', stiffness: 420, damping: 28 }}
-      >
+      <Sheet>
         <h2 className="sheet-title">遊びかた</h2>
 
         <ul className="help-list">
@@ -65,10 +74,101 @@ export function HelpSheet({ onClose }: { onClose: () => void }) {
           ))}
         </ul>
 
-        <button className="banner-btn" type="button" onClick={onClose}>
+        <button className="sheet-btn" type="button" onClick={onClose}>
           とじる
         </button>
-      </motion.div>
+      </Sheet>
+    </Overlay>
+  );
+}
+
+interface SettingsSheetProps {
+  muted: boolean;
+  onToggleMute: () => void;
+  onClose: () => void;
+}
+
+/** 設定。今は音の入切だけ。増やすときもここに行を足す。 */
+export function SettingsSheet({ muted, onToggleMute, onClose }: SettingsSheetProps) {
+  return (
+    <Overlay key="settings" onClose={onClose}>
+      <Sheet>
+        <h2 className="sheet-title">設定</h2>
+
+        <div className="sheet-row static">
+          <span>音</span>
+          <button
+            type="button"
+            className="switch"
+            role="switch"
+            aria-checked={!muted}
+            aria-label={muted ? '音を出す' : '音を消す'}
+            onClick={onToggleMute}
+          />
+        </div>
+
+        <button className="sheet-btn" type="button" onClick={onClose}>
+          とじる
+        </button>
+      </Sheet>
+    </Overlay>
+  );
+}
+
+interface DevSheetProps {
+  maxLevel: number;
+  onJump: (level: number) => void;
+  onClearProgress: () => void;
+  onClose: () => void;
+}
+
+/**
+ * 開発者用。本番の操作導線には出さず、ホーム右下の小さなピルからだけ開く。
+ * 「すきなレベルへ飛ぶ」は到達していないレベルにも飛べる（動作確認用なので
+ * わざと制限しない）。
+ */
+export function DevSheet({ maxLevel, onJump, onClearProgress, onClose }: DevSheetProps) {
+  const [value, setValue] = useState(String(maxLevel));
+
+  const level = Number.parseInt(value, 10);
+  const ok = Number.isFinite(level) && level >= 1;
+
+  return (
+    <Overlay key="dev" onClose={onClose}>
+      <Sheet>
+        <h2 className="sheet-title">テストツール</h2>
+        <p className="dev-note">本番では使わない、動作確認用のボタンです。</p>
+
+        <div className="sheet-row static">
+          <span>すきなレベルへ</span>
+          <input
+            className="dev-input"
+            type="number"
+            min={1}
+            inputMode="numeric"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            aria-label="レベル番号"
+          />
+        </div>
+
+        <button
+          className="sheet-btn"
+          type="button"
+          disabled={!ok}
+          onClick={() => ok && onJump(level)}
+        >
+          そのレベルで始める
+        </button>
+
+        <button className="sheet-row danger" type="button" onClick={onClearProgress}>
+          きろくを ぜんぶ けす
+        </button>
+
+        <button className="sheet-link" type="button" onClick={onClose}>
+          とじる
+        </button>
+      </Sheet>
     </Overlay>
   );
 }
@@ -95,21 +195,15 @@ export function LevelSheet({ current, max, onPick, onClose }: LevelSheetProps) {
 
   return (
     <Overlay key="levels" onClose={onClose}>
-      <motion.div
-        className="sheet sheet-levels"
-        initial={{ scale: 0.9, y: 18 }}
-        animate={{ scale: 1, y: 0 }}
-        exit={{ scale: 0.94, opacity: 0 }}
-        transition={{ type: 'spring', stiffness: 420, damping: 28 }}
-      >
+      <Sheet className="sheet-levels">
         <h2 className="sheet-title">レベル</h2>
 
-        <div className="level-list" ref={listRef}>
+        <div className="sheet-list" ref={listRef}>
           {levels.map((lv) => (
             <button
               key={lv}
               type="button"
-              className="level-row"
+              className="sheet-row level-row"
               data-current={lv === current}
               data-cleared={lv < max}
               onClick={() => onPick(lv)}
@@ -120,10 +214,10 @@ export function LevelSheet({ current, max, onPick, onClose }: LevelSheetProps) {
           ))}
         </div>
 
-        <button className="banner-btn" type="button" onClick={onClose}>
+        <button className="sheet-btn" type="button" onClick={onClose}>
           とじる
         </button>
-      </motion.div>
+      </Sheet>
     </Overlay>
   );
 }

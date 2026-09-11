@@ -6,7 +6,20 @@
 
 let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
-let muted = false;
+
+/** 音を消したかどうか。設定シートから切り替え、次に開いたときも残す。 */
+const MUTE_KEY = 'nyandoku.muted';
+
+function loadMuted(): boolean {
+  try {
+    return localStorage.getItem(MUTE_KEY) === '1';
+  } catch {
+    // プライベートモードなどで読めないことがある。音が鳴るだけなので既定に戻す。
+    return false;
+  }
+}
+
+let muted = loadMuted();
 
 function audio(): AudioContext | null {
   if (typeof window === 'undefined') return null;
@@ -68,6 +81,11 @@ const LADDER = [523.25, 587.33, 659.25, 783.99, 880.0, 1046.5, 1174.66, 1318.51,
 export const sfx = {
   setMuted(value: boolean) {
     muted = value;
+    try {
+      localStorage.setItem(MUTE_KEY, value ? '1' : '0');
+    } catch {
+      /* 保存できなくても、その場の入切は効いている */
+    }
   },
   isMuted() {
     return muted;
