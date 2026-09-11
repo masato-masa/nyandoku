@@ -24,7 +24,13 @@ import { BackIcon, HelpIcon, HintIcon, PawIcon, ResetIcon, UndoIcon } from './ui
 
 const STORAGE_KEY = 'nyandoku.maxLevel';
 
-/** 到達したレベル。レベル一覧に「1 〜 最新」を並べるために必要。 */
+/**
+ * クリア済みの次のレベル。「つづきから」の行き先であり、
+ * レベル一覧に「1 〜 ここまで」を並べる上限でもある。
+ *
+ * 上がるのはクリアしたときだけ。一覧から先の面へ飛んだだけでは上がらない
+ * （遊んでいない面をクリア済みとして記録してしまうため）。
+ */
 function loadMaxLevel(): number {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -69,11 +75,9 @@ export default function App() {
   const goToLevel = useCallback((level: number) => {
     setSheet('none');
     setScreen('play');
-    setMaxLevel((m) => {
-      const next = Math.max(m, level);
-      if (next !== m) saveMaxLevel(next);
-      return next;
-    });
+    // 一覧にいま遊んでいる面が並ぶよう画面上の上限は上げるが、保存はしない。
+    // 記録が増えるのはクリアしたときだけ（下の useEffect）。
+    setMaxLevel((m) => Math.max(m, level));
 
     const start = (game: GameState) => {
       setState(game);
@@ -100,6 +104,16 @@ export default function App() {
     const q = levelFromQuery();
     if (q) goToLevel(q);
   }, [goToLevel]);
+
+  // クリアした瞬間に記録する。ここを「次のレベルへ」を押したときにすると、
+  // クリア画面のままブラウザを閉じたぶんが丸ごと消える。
+  useEffect(() => {
+    if (!state || state.status !== 'won') return;
+    const next = state.level + 1;
+    if (next <= maxLevel) return;
+    saveMaxLevel(next);
+    setMaxLevel(next);
+  }, [state, maxLevel]);
 
   // ホームを見ている間に「つづきから」の面を作っておく。ここで先に作れていれば、
   // ボタンを押した瞬間に盤面が出る（起動直後のローディングが消える）。
