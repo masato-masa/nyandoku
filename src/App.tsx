@@ -24,10 +24,10 @@ import {
   BackIcon,
   GearIcon,
   HelpIcon,
-  HintIcon,
+  HintToolIcon,
   PawIcon,
-  ResetIcon,
-  UndoIcon,
+  ResetToolIcon,
+  UndoToolIcon,
 } from './ui/icons';
 
 const STORAGE_KEY = 'nyandoku.maxLevel';
@@ -304,15 +304,8 @@ export default function App() {
 
           <h1 className="title">レベル {state.level}</h1>
 
+          {/* 並びは ? が左、設定が右。4 つのゲームで同じにしてある。 */}
           <div className="header-actions">
-            <button
-              className="icon-btn"
-              type="button"
-              onClick={() => setSheet('settings')}
-              aria-label="設定"
-            >
-              <GearIcon />
-            </button>
             <button
               className="icon-btn"
               type="button"
@@ -320,6 +313,14 @@ export default function App() {
               aria-label="遊びかた"
             >
               <HelpIcon />
+            </button>
+            <button
+              className="icon-btn"
+              type="button"
+              onClick={() => setSheet('settings')}
+              aria-label="設定"
+            >
+              <GearIcon />
             </button>
           </div>
         </div>
@@ -360,10 +361,10 @@ export default function App() {
             disabled={state.history.length === 0 || state.status !== 'playing'}
             aria-label="ひとつ戻す"
           >
-            <UndoIcon />
+            <UndoToolIcon />
           </button>
           <button className="tool" type="button" onClick={doReset} aria-label="やり直す">
-            <ResetIcon />
+            <ResetToolIcon />
           </button>
           <button
             className="tool"
@@ -372,7 +373,7 @@ export default function App() {
             disabled={state.status !== 'playing'}
             aria-label="ヒント"
           >
-            <HintIcon />
+            <HintToolIcon />
           </button>
         </footer>
       </main>
