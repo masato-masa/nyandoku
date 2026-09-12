@@ -148,11 +148,27 @@ export function Board({ state, derived, onTap, onPaint, onPaintEnd }: BoardProps
   let k = 0;
   for (let i = 0; i < marks.length; i++) if (marks[i] === CAT) order.set(i, k++);
 
+  // クリア時、猫のマスを起点に光を広げるための遅れ。
+  // 一番近い猫までの距離で決めるので、猫が複数いれば波が複数から出て重なる。
+  // クリア条件は「全マスを猫の視界に入れる」なので、その達成の形そのものになる。
+  const glow = new Map<number, number>();
+  if (won) {
+    const cats = [...order.keys()].map((i) => [Math.floor(i / n), i % n] as const);
+    for (let i = 0; i < n * n; i++) {
+      const r = Math.floor(i / n);
+      const c = i % n;
+      let near = Infinity;
+      for (const [cr, cc] of cats) near = Math.min(near, Math.hypot(r - cr, c - cc));
+      glow.set(i, Number.isFinite(near) ? near * 0.07 : 0);
+    }
+  }
+
   return (
     <div
       {...bind()}
       ref={boardRef}
       className="board"
+      data-won={won}
       style={{
         gridTemplateColumns: `repeat(${n}, 1fr)`,
         // 行も明示しないと内容の高さで決まってしまい、猫を置いた瞬間に盤面がずれる
@@ -183,6 +199,7 @@ export function Board({ state, derived, onTap, onPaint, onPaintEnd }: BoardProps
             won={won}
             mood={mood}
             winOrder={order.get(i) ?? 0}
+            glowDelay={glow.get(i) ?? 0}
           />
         );
       })}
@@ -204,6 +221,8 @@ interface CellProps {
   won: boolean;
   mood: Mood;
   winOrder: number;
+  /** クリアの光が自分のところへ届くまでの秒数。猫のマスほど早い。 */
+  glowDelay: number;
 }
 
 const Cell = memo(function Cell({
@@ -220,8 +239,12 @@ const Cell = memo(function Cell({
   won,
   mood,
   winOrder,
+  glowDelay,
 }: CellProps) {
+  // マス本体（はじかれた合図とクリアの光）と猫（跳ね）は別々に動かす。
+  // 1 つにまとめると、あとから始めた動きが前の動きを打ち切ってしまう。
   const controls = useAnimationControls();
+  const hop = useAnimationControls();
 
   // 置けないマスを押した。左右に短く振って弾かれたことを伝える。
   useEffect(() => {
@@ -232,14 +255,30 @@ const Cell = memo(function Cell({
     });
   }, [rejected, rejectToken, controls]);
 
-  // クリア時、猫が上から順に跳ねる。
+  // クリア時、猫が上から順に跳ねる。少し置いてもう一周はしゃぐ。
   useEffect(() => {
     if (!won || mark !== CAT) return;
-    void controls.start({
-      y: [0, -13, 0],
-      transition: { delay: winOrder * 0.08, duration: 0.5, ease: [0.34, 1.56, 0.64, 1] },
+    void hop.start({
+      y: [0, -14, 0],
+      transition: {
+        delay: winOrder * 0.08,
+        duration: 0.5,
+        ease: [0.34, 1.56, 0.64, 1],
+        repeat: 1,
+        repeatDelay: 0.45,
+      },
     });
-  }, [won, mark, winOrder, controls]);
+  }, [won, mark, winOrder, hop]);
+
+  // クリア時、猫のマスを起点に光が広がる。壁は光らせない（視界に入る対象ではない）。
+  useEffect(() => {
+    if (!won || wall) return;
+    void controls.start({
+      filter: ['brightness(1)', 'brightness(1.3)', 'brightness(1)'],
+      scale: [1, 1.07, 1],
+      transition: { delay: 0.2 + glowDelay, duration: 0.52, ease: 'easeInOut' },
+    });
+  }, [won, wall, glowDelay, controls]);
 
   const className = [
     'cell',
@@ -275,7 +314,9 @@ const Cell = memo(function Cell({
               exit={{ scale: 0, opacity: 0, transition: { duration: 0.12 } }}
               transition={{ type: 'spring', stiffness: 620, damping: 20, mass: 0.7 }}
             >
-              <Cat mood={mood} seed={index} />
+              <motion.span className="mark-inner" animate={hop}>
+                <Cat mood={mood} seed={index} />
+              </motion.span>
             </motion.span>
           )}
           {mark === CROSS && (

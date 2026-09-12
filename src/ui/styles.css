@@ -159,6 +159,47 @@
   display: block;
 }
 
+/* ---- クリア時の盤面演出 ---- */
+/* 猫だけを跳ねさせる入れ物。マスの当たり判定や大きさには関与しない。 */
+.mark-inner {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+}
+
+/* 光の波が通り過ぎたころ、盤面が一度だけ弾む。
+   transform なのでレイアウトは動かない（タップ位置もずれない）。 */
+.board[data-won='true'] {
+  animation: board-pop 0.5s var(--ease) 1.4s both;
+}
+
+@keyframes board-pop {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.035);
+  }
+}
+
+/* 紙吹雪。画面いっぱいに降らせるが、指の当たり判定は素通しにする。 */
+.confetti {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 5; /* 盤面より上、シート（10）より下 */
+}
+
+.confetti-piece {
+  position: absolute;
+  top: 0;
+  display: block;
+  will-change: transform;
+}
+
 /* ---- クリア演出 ---- */
 .banner-card {
   background: var(--surface);
@@ -288,6 +329,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .cat-img {
+    animation: none;
+  }
+  .board[data-won='true'] {
     animation: none;
   }
 }

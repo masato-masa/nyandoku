@@ -18,6 +18,7 @@ import { peekLevel, prefetchLevel, requestLevel } from './core/puzzleClient';
 import { sfx } from './core/sfx';
 import { Board, type PaintMode } from './ui/Board';
 import { Cat, CAT_NORMAL_SRC } from './ui/Cat';
+import { Confetti } from './ui/Confetti';
 import { Home } from './ui/Home';
 import { DevSheet, HelpSheet, LevelSheet, Overlay, SettingsSheet } from './ui/Sheets';
 import {
@@ -67,6 +68,29 @@ function levelFromQuery(): number | null {
   return Number.isFinite(n) && n >= 1 ? n : null;
 }
 
+/**
+ * クリアしてからポップアップを出すまでの時間。この間は盤面の演出を見せる。
+ * Board.tsx と Confetti.tsx の遅れはこの時刻表に合わせてある。
+ *
+ *   0.00s  クリア音 / 猫が上から順に跳ねる
+ *   0.20s  猫のマスを起点に光が広がる
+ *   0.95s  猫がもう一周跳ねる
+ *   1.00s  紙吹雪が降り始める
+ *   1.40s  盤面全体が弾む
+ *   2.40s  ここ（クリアポップアップ）
+ */
+const WIN_CELEBRATION_MS = 2400;
+
+/** 動きを減らす設定なら演出を待たせない。見せるものがほとんど無いため。 */
+function celebrationMs(): number {
+  try {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return 400;
+  } catch {
+    /* 判定できなければ通常どおり */
+  }
+  return WIN_CELEBRATION_MS;
+}
+
 type Screen = 'home' | 'play';
 type Sheet = 'none' | 'help' | 'levels' | 'settings' | 'dev';
 
@@ -77,7 +101,10 @@ export default function App() {
   const [maxLevel, setMaxLevel] = useState(() => Math.max(loadMaxLevel(), levelFromQuery() ?? 1));
   const [sheet, setSheet] = useState<Sheet>('none');
   const [muted, setMutedState] = useState(() => sfx.isMuted());
+  /** クリア直後、盤面の演出を見せている間だけ true。この間はポップアップを出さない。 */
+  const [celebrating, setCelebrating] = useState(false);
   const crossStep = useRef(0);
+  const celebrateTimer = useRef(0);
 
   const derived = useMemo(() => (state ? derive(state) : null), [state]);
 
@@ -114,6 +141,14 @@ export default function App() {
     if (q) goToLevel(q);
   }, [goToLevel]);
 
+  // クリアしていない間は必ず閉じておく（やり直し・別レベルへ移動・ホームへ戻る）。
+  useEffect(() => {
+    if (state?.status !== 'won') {
+      window.clearTimeout(celebrateTimer.current);
+      setCelebrating(false);
+    }
+  }, [state?.status, state?.level]);
+
   // クリアした瞬間に記録する。ここを「次のレベルへ」を押したときにすると、
   // クリア画面のままブラウザを閉じたぶんが丸ごと消える。
   useEffect(() => {
@@ -149,6 +184,10 @@ export default function App() {
         break;
       case 'win':
         window.setTimeout(() => sfx.win(), 140);
+        // 盤面の演出を見せている間はポップアップを出さない。
+        setCelebrating(true);
+        window.clearTimeout(celebrateTimer.current);
+        celebrateTimer.current = window.setTimeout(() => setCelebrating(false), celebrationMs());
         break;
       default:
         break;
@@ -378,6 +417,8 @@ export default function App() {
         </footer>
       </main>
 
+      {state.status === 'won' && <Confetti />}
+
       <AnimatePresence>
         {commonSheets}
         {sheet === 'levels' && (
@@ -389,7 +430,7 @@ export default function App() {
           />
         )}
 
-        {state.status === 'won' && sheet === 'none' && (
+        {state.status === 'won' && !celebrating && sheet === 'none' && (
           <Overlay key="won">
             <motion.div
               className="banner-card"
