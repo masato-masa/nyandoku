@@ -4,8 +4,8 @@
     {
       "name": "nyandoku",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "port": 5173
+      "runtimeArgs": ["exec", "--", "vite", "--port", "5182", "--strictPort"],
+      "port": 5182
     }
   ]
 }

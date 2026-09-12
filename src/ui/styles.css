@@ -27,15 +27,33 @@
   display: block;
 }
 
+/* 肉球の下に素点を置く。2 行になっても .stat の高さが --status-h(30px) を
+   超えないよう、肉球 12px + 数字 10px + 余白 6px = 28px に収めてある。
+   ここが太ると、2 段目を持たない他のゲームとの間で盤面の縦位置がずれる。 */
+.difficulty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+
 .difficulty-paws {
   display: flex;
   gap: 3px;
 }
 
 .paw {
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
   display: block;
+}
+
+.difficulty-score {
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
 }
 
 /* ---- 盤面 ---- */

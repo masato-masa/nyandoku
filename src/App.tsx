@@ -329,6 +329,7 @@ export default function App() {
   const placed = catCount(state.marks);
   const needed = state.puzzle.solution.length;
   const band = difficultyBand(state.puzzle.difficulty);
+  const score = Math.round(state.puzzle.difficulty);
 
   return (
     <div className="app">
@@ -372,12 +373,16 @@ export default function App() {
             <span className="stat-num stat-total">{needed}</span>
           </span>
 
-          <span className="stat" aria-label={`難易度 ${band} / 5`}>
+          <span className="stat" aria-label={`難易度 ${band} / 5（${score}）`}>
             <span className="stat-label">難易度</span>
-            <span className="difficulty-paws">
-              {[1, 2, 3, 4, 5].map((i) => (
-                <PawIcon key={i} filled={i <= band} />
-              ))}
+            {/* 肉球の下に素点。行が増えても .stat は --status-h に収まる寸法にしてある。 */}
+            <span className="difficulty">
+              <span className="difficulty-paws">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <PawIcon key={i} filled={i <= band} />
+                ))}
+              </span>
+              <span className="difficulty-score">{score}</span>
             </span>
           </span>
         </div>
