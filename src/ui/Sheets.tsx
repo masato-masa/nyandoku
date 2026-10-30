@@ -85,25 +85,39 @@ export function HelpSheet({ onClose }: { onClose: () => void }) {
 interface SettingsSheetProps {
   muted: boolean;
   onToggleMute: () => void;
+  bgmOn: boolean;
+  onToggleBgm: () => void;
   onClose: () => void;
 }
 
-/** 設定。今は音の入切だけ。増やすときもここに行を足す。 */
-export function SettingsSheet({ muted, onToggleMute, onClose }: SettingsSheetProps) {
+/** 設定。効果音と BGM の入切。増やすときもここに行を足す。 */
+export function SettingsSheet({ muted, onToggleMute, bgmOn, onToggleBgm, onClose }: SettingsSheetProps) {
   return (
     <Overlay key="settings" onClose={onClose}>
       <Sheet>
         <h2 className="sheet-title">設定</h2>
 
         <div className="sheet-row static">
-          <span>音</span>
+          <span>効果音</span>
           <button
             type="button"
             className="switch"
             role="switch"
             aria-checked={!muted}
-            aria-label={muted ? '音を出す' : '音を消す'}
+            aria-label={muted ? '効果音を出す' : '効果音を消す'}
             onClick={onToggleMute}
+          />
+        </div>
+
+        <div className="sheet-row static">
+          <span>BGM</span>
+          <button
+            type="button"
+            className="switch"
+            role="switch"
+            aria-checked={bgmOn}
+            aria-label={bgmOn ? 'BGM を消す' : 'BGM を流す'}
+            onClick={onToggleBgm}
           />
         </div>
 

@@ -101,6 +101,7 @@ export default function App() {
   const [maxLevel, setMaxLevel] = useState(() => Math.max(loadMaxLevel(), levelFromQuery() ?? 1));
   const [sheet, setSheet] = useState<Sheet>('none');
   const [muted, setMutedState] = useState(() => sfx.isMuted());
+  const [bgmOn, setBgmOnState] = useState(() => sfx.isBgmOn());
   /** クリア直後、盤面の演出を見せている間だけ true。この間はポップアップを出さない。 */
   const [celebrating, setCelebrating] = useState(false);
   const crossStep = useRef(0);
@@ -275,6 +276,13 @@ export default function App() {
     });
   }, []);
 
+  const toggleBgm = useCallback(() => {
+    setBgmOnState((on) => {
+      sfx.setBgmOn(!on);
+      return !on;
+    });
+  }, []);
+
   /**
    * ホームとプレイのどちらからも同じ形で出すシート。
    *
@@ -289,6 +297,8 @@ export default function App() {
         key="settings"
         muted={muted}
         onToggleMute={toggleMute}
+        bgmOn={bgmOn}
+        onToggleBgm={toggleBgm}
         onClose={() => setSheet('none')}
       />
     ),
