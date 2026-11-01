@@ -258,6 +258,18 @@
   color: var(--muted);
 }
 
+/* 突破の行のすぐ下に寄せる。段が上がった回だけ見出しの色で目立たせる。 */
+.banner-card .banner-rank {
+  margin-top: -10px;
+  font-size: 13px;
+}
+
+.banner-card .banner-rank-up {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--title);
+}
+
 /* ---- レベル一覧 ---- */
 /* 下から上に 1 → 最新 と並ぶ。描画は大きい番号から流し込んでいる。 */
 .level-row {

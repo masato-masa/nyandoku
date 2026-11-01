@@ -14,6 +14,7 @@ import {
   type TapResult,
 } from './core/game';
 import { difficultyBand } from './core/puzzle';
+import { rankAfterClear } from './core/rank';
 import { peekLevel, prefetchLevel, requestLevel } from './core/puzzleClient';
 import { sfx } from './core/sfx';
 import { Board, type PaintMode } from './ui/Board';
@@ -340,6 +341,7 @@ export default function App() {
   const needed = state.puzzle.solution.length;
   const band = difficultyBand(state.puzzle.difficulty);
   const score = Math.round(state.puzzle.difficulty);
+  const rank = rankAfterClear(state.level);
 
   return (
     <div className="app">
@@ -467,6 +469,14 @@ export default function App() {
                 レベル {state.level} 突破
                 {state.hintsUsed > 0 ? ` · ヒント ${state.hintsUsed} 回` : ''}
               </p>
+              {/* 進み具合の節目。10 面ごとに段が上がる（ND-5） */}
+              {rank.rankedUp ? (
+                <p className="banner-rank banner-rank-up">ねこ段 {rank.rank} にあがった！</p>
+              ) : (
+                <p className="banner-rank">
+                  ねこ段 {rank.rank} · つぎの段まで あと {rank.toNext} 面
+                </p>
+              )}
               <button
                 className="sheet-btn"
                 type="button"
