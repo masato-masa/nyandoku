@@ -34,6 +34,11 @@ const scores = [];
 const bands = {};
 let unsolved = 0;
 let overDepth = 0;
+// 盤面の指紋。生成を速くしただけの変更なら、直す前と同じ値になるはず（ND-6）
+let fingerprint = 0x811c9dc5;
+const mix = (v) => {
+  fingerprint = Math.imul(fingerprint ^ (v & 0xff), 0x01000193) >>> 0;
+};
 
 const started = Date.now();
 for (let level = 1; level <= LEVELS; level++) {
@@ -42,6 +47,9 @@ for (let level = 1; level <= LEVELS; level++) {
   const ms = performance.now() - t0;
 
   times.push(ms);
+  for (const v of p.wall) mix(v);
+  for (const v of p.numbers) mix(v + 1);
+  for (const v of p.solution) mix(v);
   scores.push(p.difficulty);
   stages[p.stage]++;
   const band = difficultyBand(p.difficulty);
@@ -86,9 +94,19 @@ console.log('\n難易度');
 console.log(`  最小 ${round(ss[0])} / 25% ${round(at(ss, 0.25))} / 中央 ${round(at(ss, 0.5))} / 75% ${round(at(ss, 0.75))} / 最大 ${round(ss[ss.length - 1])}`);
 console.log(`  肉球の分布 ${JSON.stringify(bands)}`);
 
+// 50 面ごとの難易度の中央値。頭打ちしているかを見る
+const buckets = [];
+for (let i = 0; i < scores.length; i += 50) {
+  const part = scores.slice(i, i + 50).sort((a, b) => a - b);
+  buckets.push(`${i + 1}-${i + part.length}:${round(at(part, 0.5))}`);
+}
+console.log(`  50 面ごとの中央 ${buckets.join(' ')}`);
+
 console.log('\n生成時間');
 console.log(`  中央 ${round(at(sorted, 0.5))}ms / 90% ${round(at(sorted, 0.9))}ms / 最悪 ${round(sorted[sorted.length - 1])}ms`);
 if (slow.length) console.log(`  3 秒超: ${slow.map((x) => `Lv${x.level}(${x.ms}ms)`).join(' ')}`);
+
+console.log(`\n盤面の指紋 ${fingerprint.toString(16)}`);
 
 console.log('\n健全性');
 console.log(`  論理で解けない面 ${unsolved}${unsolved ? '  ← 異常' : ''}`);

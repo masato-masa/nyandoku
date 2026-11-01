@@ -197,24 +197,58 @@ function findCover(
  */
 const SOLVER_NODE_BUDGET = 4000;
 
-/** ルールを満たす配置が何通りあるか。limit か節点の上限に達したら打ち切る。 */
+/**
+ * ルールを満たす配置が何通りあるか。limit か節点の上限に達したら打ち切る。
+ *
+ * 生成時間の 9 割がここ（ND-6 のプロファイル: 12.5 秒中 11.3 秒）。うち 7 割は
+ * 葉で視野を毎回作り直していた分だったので、視野を盤面ごとに 1 度だけビット列に
+ * して OR で数える。状態も Map から型付き配列にした。
+ *
+ * 探索の順番と節点の数え方は変えていない。節点の上限で打ち切る都合上、
+ * ここを変えると「どの盤面が捨てられるか」が変わり、同じレベルから別の盤面が
+ * 出てしまう（保存済みの面と食い違う）。速くするのは定数倍だけにすること。
+ */
 export function countSolutions(n: number, wall: Uint8Array, numbers: Int8Array, limit = 2): number {
+  const size = n * n;
   const walls: number[] = [];
-  for (let i = 0; i < n * n; i++) if (wall[i] && numbers[i] >= 0) walls.push(i);
+  for (let i = 0; i < size; i++) if (wall[i] && numbers[i] >= 0) walls.push(i);
 
   // 周りの空きマスが少ない壁から決めると、枝が早く枯れる
   const around = walls.map((w) => neighbours8(n, w).filter((c) => !wall[c]));
   const order = walls.map((_, i) => i).sort((a, b) => around[a].length - around[b].length);
 
-  const state = new Map<number, boolean>();
+  // 視野と「見えていなければならないマス」をビット列で持つ
+  const words = (size + 31) >>> 5;
+  const need = new Uint32Array(words);
+  for (let i = 0; i < size; i++) if (!wall[i]) need[i >>> 5] |= 1 << (i & 31);
+  const vision = new Uint32Array(size * words);
+  const involved: number[] = [];
+  const isInvolved = new Uint8Array(size);
+  for (const list of around) {
+    for (const c of list) {
+      if (isInvolved[c]) continue;
+      isInvolved[c] = 1;
+      involved.push(c);
+      const v = visionOf(n, wall, c);
+      for (let j = 0; j < size; j++) if (v[j]) vision[c * words + (j >>> 5)] |= 1 << (j & 31);
+    }
+  }
+  const seen = new Uint32Array(words);
+
+  /** -1 = 未定、0 = 空、1 = 猫 */
+  const state = new Int8Array(size).fill(-1);
   let found = 0;
   let nodes = 0;
   let exhausted = false;
 
   const finish = () => {
-    const cats: number[] = [];
-    for (const [cell, on] of state) if (on) cats.push(cell);
-    if (allCovered(n, wall, coverageOf(n, wall, cats))) found++;
+    seen.fill(0);
+    for (const c of involved) {
+      if (state[c] !== 1) continue;
+      for (let k = 0; k < words; k++) seen[k] |= vision[c * words + k];
+    }
+    for (let k = 0; k < words; k++) if ((seen[k] & need[k]) >>> 0 !== need[k]) return;
+    found++;
   };
 
   const rec = (k: number): void => {
@@ -231,26 +265,31 @@ export function countSolutions(n: number, wall: Uint8Array, numbers: Int8Array, 
     const w = order[k];
     const want = numbers[walls[w]];
     const cells = around[w];
-    const fixed = cells.filter((c) => state.get(c) === true).length;
-    const open = cells.filter((c) => state.get(c) === undefined);
-    const need = want - fixed;
-    if (need < 0 || need > open.length) return;
+    let fixed = 0;
+    const open: number[] = [];
+    for (const c of cells) {
+      if (state[c] === 1) fixed++;
+      else if (state[c] === -1) open.push(c);
+    }
+    const needCats = want - fixed;
+    if (needCats < 0 || needCats > open.length) return;
 
-    const choose = (start: number, picked: number[]): void => {
-      if (found >= limit) return;
-      if (picked.length === need) {
-        for (const c of open) state.set(c, picked.includes(c));
+    // open の中から needCats 個を辞書順に選ぶ（元の実装と同じ順番）
+    const choose = (start: number, count: number, mask: number): void => {
+      if (found >= limit || exhausted) return;
+      if (count === needCats) {
+        for (let i = 0; i < open.length; i++) state[open[i]] = (mask >>> i) & 1;
         rec(k + 1);
-        for (const c of open) state.delete(c);
+        for (let i = 0; i < open.length; i++) state[open[i]] = -1;
         return;
       }
       for (let i = start; i < open.length; i++) {
-        if (open.length - i < need - picked.length) break;
-        choose(i + 1, [...picked, open[i]]);
+        if (open.length - i < needCats - count) break;
+        choose(i + 1, count + 1, mask | (1 << i));
         if (found >= limit) return;
       }
     };
-    choose(0, []);
+    choose(0, 0, 0);
   };
 
   rec(0);
@@ -782,11 +821,21 @@ export function difficultyOf(a: Analysis): number {
   );
 }
 
+/**
+ * 肉球の段。点の分布から引き直した（ND-5、2026-11-01）。
+ *
+ * 旧閾値 36/50/62/72 では 22 面ごろから 93% が 5 になり、表示が機能していなかった。
+ * 実測の点は 1〜10 面で 24〜54、11〜20 面で 33〜80、21〜40 面で 56〜106、
+ * 40 面以降は 25% 107・中央 113・75% 130 で横ばい。そこで
+ *   序盤 40 面で 1→3 と上がり、それ以降は「その面が並より易しいか難しいか」で
+ *   3〜5 に散る
+ * ように切った。進み具合そのものは肉球ではなく「ねこ段」（rank.ts）で見せる。
+ */
 export function difficultyBand(score: number): 1 | 2 | 3 | 4 | 5 {
-  if (score < 36) return 1;
-  if (score < 50) return 2;
-  if (score < 62) return 3;
-  if (score < 72) return 4;
+  if (score < 50) return 1;
+  if (score < 75) return 2;
+  if (score < 100) return 3;
+  if (score < 120) return 4;
   return 5;
 }
 
