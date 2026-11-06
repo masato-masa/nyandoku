@@ -21,7 +21,15 @@ import { Board, type PaintMode } from './ui/Board';
 import { Cat, CAT_NORMAL_SRC } from './ui/Cat';
 import { Confetti } from './ui/Confetti';
 import { Home } from './ui/Home';
-import { DevSheet, HelpSheet, LevelSheet, Overlay, SettingsSheet } from './ui/Sheets';
+import { DevSheet, HelpSheet, LevelSheet, Overlay, ReportSheet, SettingsSheet } from './ui/Sheets';
+import { Survey } from './ui/Survey';
+import {
+  addSurvey,
+  endAttempt,
+  recordEvent,
+  shouldAskSurvey,
+  startAttempt,
+} from './core/playlog';
 import {
   BackIcon,
   GearIcon,
@@ -93,7 +101,7 @@ function celebrationMs(): number {
 }
 
 type Screen = 'home' | 'play';
-type Sheet = 'none' | 'help' | 'levels' | 'settings' | 'dev';
+type Sheet = 'none' | 'help' | 'levels' | 'settings' | 'dev' | 'report';
 
 export default function App() {
   const [state, setState] = useState<GameState | null>(null);
@@ -105,6 +113,8 @@ export default function App() {
   const [bgmOn, setBgmOnState] = useState(() => sfx.isBgmOn());
   /** クリア直後、盤面の演出を見せている間だけ true。この間はポップアップを出さない。 */
   const [celebrating, setCelebrating] = useState(false);
+  /** クリア直後に感想を聞くか（playlog が間隔を決める） */
+  const [askSurvey, setAskSurvey] = useState(false);
   const crossStep = useRef(0);
   const celebrateTimer = useRef(0);
 
@@ -117,7 +127,9 @@ export default function App() {
     // 記録が増えるのはクリアしたときだけ（下の useEffect）。
     setMaxLevel((m) => Math.max(m, level));
 
+    setAskSurvey(false);
     const start = (game: GameState) => {
+      startAttempt(game.level, game.puzzle.difficulty);
       setState(game);
       setLoading(false);
       // 次のレベルを裏で先に作っておく。1 面解くのに数分かかるので、
@@ -167,24 +179,38 @@ export default function App() {
     if (screen === 'home') prefetchLevel(maxLevel);
   }, [screen, maxLevel]);
 
+  // タブを閉じる・アプリを切り替えるときも、解けていなければ「離れた」として残す。
+  useEffect(() => {
+    const onHide = () => endAttempt('left');
+    window.addEventListener('pagehide', onHide);
+    return () => window.removeEventListener('pagehide', onHide);
+  }, []);
+
   /** 状態の更新と、その手に応じた音・触覚をまとめて扱う唯一の入り口。 */
   const apply = useCallback((result: TapResult) => {
     setState(result.state);
 
     switch (result.effect) {
       case 'cat':
+        recordEvent('move');
         sfx.cat(Math.max(0, catCount(result.state.marks) - 1));
         break;
       case 'cross':
+        recordEvent('move');
         sfx.cross(crossStep.current++);
         break;
       case 'erase':
+        recordEvent('move');
         sfx.erase();
         break;
       case 'reject':
+        recordEvent('reject');
         sfx.conflict();
         break;
       case 'win':
+        recordEvent('move');
+        endAttempt('won');
+        setAskSurvey(shouldAskSurvey());
         window.setTimeout(() => sfx.win(), 140);
         // 盤面の演出を見せている間はポップアップを出さない。
         setCelebrating(true);
@@ -230,6 +256,7 @@ export default function App() {
   }, []);
 
   const doUndo = useCallback(() => {
+    if (live.current && live.current.history.length > 0) recordEvent('undo');
     setState((s) => {
       if (!s || s.history.length === 0) return s;
       sfx.undo();
@@ -238,15 +265,20 @@ export default function App() {
   }, []);
 
   const doReset = useCallback(() => {
+    recordEvent('reset');
     sfx.erase();
     setState((s) => (s ? reset(s) : s));
   }, []);
 
   const doHint = useCallback(() => {
-    if (state) apply(hint(state));
+    if (state) {
+      recordEvent('hint');
+      apply(hint(state));
+    }
   }, [apply, state]);
 
   const goHome = useCallback(() => {
+    endAttempt('left');
     setSheet('none');
     setScreen('home');
   }, []);
@@ -325,10 +357,12 @@ export default function App() {
             <DevSheet
               maxLevel={maxLevel}
               onJump={goToLevel}
+              onOpenReport={() => setSheet('report')}
               onClearProgress={clearProgress}
               onClose={() => setSheet('none')}
             />
           )}
+          {sheet === 'report' && <ReportSheet onClose={() => setSheet('dev')} />}
         </AnimatePresence>
       </div>
     );
@@ -476,6 +510,20 @@ export default function App() {
                 <p className="banner-rank">
                   ねこ段 {rank.rank} · つぎの段まで あと {rank.toNext} 面
                 </p>
+              )}
+              {askSurvey && (
+                <Survey
+                  onDone={(answers) => {
+                    addSurvey({
+                      level: state.level,
+                      difficulty: Math.round(state.puzzle.difficulty),
+                      at: Date.now(),
+                      ...answers,
+                    });
+                    setAskSurvey(false);
+                  }}
+                  onSkip={() => setAskSurvey(false)}
+                />
               )}
               <button
                 className="sheet-btn"

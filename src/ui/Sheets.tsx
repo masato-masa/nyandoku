@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { CAT_NORMAL_SRC } from './Cat';
+import { buildReport, clearPlayLog, exportPlayLog } from '../core/playlog';
 
 /** 画面全体を覆う下地。ホームとプレイの両方から使う。 */
 export function Overlay({
@@ -132,6 +133,7 @@ export function SettingsSheet({ muted, onToggleMute, bgmOn, onToggleBgm, onClose
 interface DevSheetProps {
   maxLevel: number;
   onJump: (level: number) => void;
+  onOpenReport: () => void;
   onClearProgress: () => void;
   onClose: () => void;
 }
@@ -141,7 +143,7 @@ interface DevSheetProps {
  * 「すきなレベルへ飛ぶ」は到達していないレベルにも飛べる（動作確認用なので
  * わざと制限しない）。
  */
-export function DevSheet({ maxLevel, onJump, onClearProgress, onClose }: DevSheetProps) {
+export function DevSheet({ maxLevel, onJump, onOpenReport, onClearProgress, onClose }: DevSheetProps) {
   const [value, setValue] = useState(String(maxLevel));
 
   const level = Number.parseInt(value, 10);
@@ -173,6 +175,10 @@ export function DevSheet({ maxLevel, onJump, onClearProgress, onClose }: DevShee
           onClick={() => ok && onJump(level)}
         >
           そのレベルで始める
+        </button>
+
+        <button className="sheet-btn" type="button" onClick={onOpenReport}>
+          あそびのレポート
         </button>
 
         <button className="sheet-row danger" type="button" onClick={onClearProgress}>
@@ -229,6 +235,105 @@ export function LevelSheet({ current, max, onPick, onClose }: LevelSheetProps) {
         </div>
 
         <button className="sheet-btn" type="button" onClick={onClose}>
+          とじる
+        </button>
+      </Sheet>
+    </Overlay>
+  );
+}
+
+const pct = (v: number | null) => (v === null ? '-' : `${Math.round(v * 100)}%`);
+const num = (v: number | null, d = 1) => (v === null ? '-' : v.toFixed(d));
+
+/**
+ * 端末に残した「あそびの記録」の集計。面白さの観点（離脱の山・迷い・ヒント・感想）を
+ * 数字で見る。外へは送らず、必要なら JSON を複製して持ち出す。
+ */
+export function ReportSheet({ onClose }: { onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const r = buildReport();
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(exportPlayLog());
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <Overlay key="report" onClose={onClose}>
+      <Sheet>
+        <h2 className="sheet-title">あそびのレポート</h2>
+        {r.attempts === 0 ? (
+          <p className="dev-note">まだ記録がありません。何面か遊ぶとここに出ます。</p>
+        ) : (
+          <>
+            <table className="report-table">
+              <tbody>
+                <tr><td>遊んだ回数</td><td>{r.attempts}（クリア {r.wins} / 離れた {r.lefts}）</td></tr>
+                <tr><td>解けずに離れた割合</td><td>{pct(r.leaveRate)}</td></tr>
+                <tr><td>クリアまで（中央値）</td><td>{num(r.medianActiveSec)} 秒</td></tr>
+                <tr><td>最初の 1 手まで（中央値）</td><td>{num(r.medianFirstMoveSec)} 秒</td></tr>
+                <tr><td>ヒントを使った割合</td><td>{pct(r.hintRate)}</td></tr>
+                <tr><td>やり直した割合</td><td>{pct(r.resetRate)}</td></tr>
+                <tr><td>戻す回数（中央値）</td><td>{num(r.medianUndos, 0)}</td></tr>
+                <tr><td>置けない所を押した回数</td><td>{num(r.medianRejects, 0)}</td></tr>
+              </tbody>
+            </table>
+
+            <p className="report-note">難しさの帯ごと（1 かんたん〜5 むずかしい）</p>
+            <table className="report-table">
+              <thead>
+                <tr><th>帯</th><th>回</th><th>離れた</th><th>秒</th><th>ヒント</th></tr>
+              </thead>
+              <tbody>
+                {r.byBand.map((b) => (
+                  <tr key={b.band}>
+                    <td>{b.band}</td>
+                    <td>{b.n}</td>
+                    <td>{pct(b.leaveRate)}</td>
+                    <td>{b.medianSec ?? '-'}</td>
+                    <td>{pct(b.hintRate)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {r.worstLevels.length > 0 && (
+              <p className="report-note">
+                離れた面: {r.worstLevels.map((w) => `Lv${w.level}(${w.lefts}/${w.tries})`).join('、')}
+              </p>
+            )}
+
+            <p className="report-note">かんそう {r.surveys} 件（1〜5）</p>
+            <table className="report-table">
+              <tbody>
+                <tr><td>じぶんの力で解けた（熟達）</td><td>{num(r.avgMastery)}</td></tr>
+                <tr><td>つぎもやりたい（好奇心）</td><td>{num(r.avgCuriosity)}</td></tr>
+                <tr><td>難しさ（3 がちょうど）</td><td>{num(r.avgChallenge)} / ちょうど {pct(r.challengeFit)}</td></tr>
+              </tbody>
+            </table>
+          </>
+        )}
+
+        <button className="sheet-btn" type="button" onClick={copy} disabled={r.attempts === 0}>
+          {copied ? 'コピーしました' : 'データを複製（JSON）'}
+        </button>
+        <button
+          className="sheet-row danger"
+          type="button"
+          onClick={() => {
+            if (window.confirm('あそびの記録を けしますか？')) {
+              clearPlayLog();
+              onClose();
+            }
+          }}
+        >
+          記録をけす
+        </button>
+        <button className="sheet-link" type="button" onClick={onClose}>
           とじる
         </button>
       </Sheet>
