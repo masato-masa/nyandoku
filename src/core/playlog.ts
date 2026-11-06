@@ -170,12 +170,13 @@ export function endAttempt(outcome: 'won' | 'left'): void {
   save(s);
 }
 
-/** クリアの直後に感想を聞くか。早めに 1 回、その後は 12 クリアごと。 */
+/**
+ * クリアの直後に感想を聞くか。
+ * 2026-11-07: ユーザーの意向（小手先の追加要素は要らない）で、プレイヤー向けの感想は出さない。
+ * 記録とレポート（開発者メニュー）だけを残し、感想の画面は必要になったら true を返すよう戻す。
+ */
 export function shouldAskSurvey(): boolean {
-  const s = load();
-  const c = s.clears;
-  if (c === 0) return false;
-  return c === 4 || (c > 4 && (c - 4) % 12 === 0);
+  return false;
 }
 
 export function addSurvey(v: Survey): void {
