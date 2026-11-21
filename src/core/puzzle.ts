@@ -1001,7 +1001,7 @@ const CLOSE_ENOUGH = 0.13;
  * つまみを引き直す回数。時間ではなく回数で区切っているのは、
  * 実行速度で結果が変わると「同じレベルは同じ盤面」が崩れるため。
  */
-const KNOB_ATTEMPTS = 44;
+const KNOB_ATTEMPTS = 88;
 /** 1 組のつまみで盤面を作り直す上限。 */
 const BOARD_ATTEMPTS = 2200;
 /**
