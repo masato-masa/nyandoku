@@ -512,6 +512,16 @@ body {
   background: var(--accent);
 }
 
+.switch::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, var(--hit));
+  height: var(--hit);
+  transform: translate(-50%, -50%);
+}
+
 .switch::after {
   content: '';
   position: absolute;
@@ -543,6 +553,7 @@ body {
 .sheet-btn {
   border: 0;
   border-radius: 999px;
+  min-height: var(--hit);
   padding: 11px 30px;
   font: inherit;
   font-size: 15px;
@@ -578,10 +589,11 @@ body {
   border: 0;
   background: none;
   font: inherit;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--muted);
   cursor: pointer;
-  padding: 4px 12px;
+  min-height: var(--hit);
+  padding: 4px 16px;
 }
 
 @media (max-width: 640px) {

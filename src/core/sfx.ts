@@ -48,7 +48,14 @@ function audio(): AudioContext | null {
     const soften = ctx.createBiquadFilter();
     soften.type = 'lowpass';
     soften.frequency.value = 4200;
-    master.connect(soften).connect(ctx.destination);
+    // 重なったときの音割れと急な大音量を抑えるコンプレッサ。
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -14;
+    comp.knee.value = 12;
+    comp.ratio.value = 4;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.15;
+    master.connect(soften).connect(comp).connect(ctx.destination);
     bgmBus = ctx.createGain();
     bgmBus.gain.value = BGM_GAIN;
     bgmBus.connect(ctx.destination);
@@ -113,11 +120,17 @@ function loadSamples(ac: AudioContext): void {
 }
 
 /** 録音を鳴らす。rate は再生速度（音の高さ）。鳴らせたら true。 */
+const lastAt = new Map<SampleName, number>();
+const MIN_GAP_MS = 45;
 function sample(name: SampleName, rate = 1, gainScale = 1): boolean {
   const ac = audio();
   if (!ac || !master || muted) return muted;
   const buf = buffers.get(name);
   if (!buf) return false;
+  // 連打で同じ音が数十 ms の間に重なると濁るので間引く（鳴らしたことにして合成音へ落とさない）。
+  const nowMs = performance.now();
+  if (nowMs - (lastAt.get(name) ?? -1e9) < MIN_GAP_MS) return true;
+  lastAt.set(name, nowMs);
   const src = ac.createBufferSource();
   src.buffer = buf;
   src.playbackRate.value = rate;
