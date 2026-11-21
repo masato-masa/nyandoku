@@ -103,7 +103,7 @@ body {
   justify-self: end;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .title {
@@ -145,7 +145,7 @@ body {
 }
 
 .stat-label {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--muted);
@@ -367,6 +367,16 @@ body {
   background: rgb(115 80 86 / 0.08);
   cursor: pointer;
   opacity: 0.8;
+}
+
+.dev-pill::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, var(--hit));
+  height: var(--hit);
+  transform: translate(-50%, -50%);
 }
 
 .dev-pill:active {
