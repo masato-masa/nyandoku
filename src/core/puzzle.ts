@@ -831,11 +831,12 @@ export function difficultyOf(a: Analysis): number {
  *   3〜5 に散る
  * ように切った。進み具合そのものは肉球ではなく「ねこ段」（rank.ts）で見せる。
  */
+/* 2026-11-22（ND-10）: ND-9 で点が上がり、旧閾値 50/75/100/120 だと肉球 5 が 56% になったので 50/85/120/145 に引き直した（60 面以降は 3:34% 4:38% 5:28%）。 */
 export function difficultyBand(score: number): 1 | 2 | 3 | 4 | 5 {
   if (score < 50) return 1;
-  if (score < 75) return 2;
-  if (score < 100) return 3;
-  if (score < 120) return 4;
+  if (score < 85) return 2;
+  if (score < 120) return 3;
+  if (score < 145) return 4;
   return 5;
 }
 

@@ -11,6 +11,7 @@
 
 import { build } from 'esbuild';
 
+import { writeFileSync } from 'node:fs';
 const LEVELS = Number.parseInt(process.argv[2] ?? '1000', 10);
 
 const bundled = await build({
@@ -41,6 +42,12 @@ const mix = (v) => {
 };
 
 const started = Date.now();
+// 肉球の閾値を引き直すときの材料。SCORES_OUT=ファイル で面ごとの難易度の点を JSON に残す。
+if (process.env.SCORES_OUT) {
+  process.on('exit', () => {
+    writeFileSync(process.env.SCORES_OUT, JSON.stringify(scores));
+  });
+}
 for (let level = 1; level <= LEVELS; level++) {
   const t0 = performance.now();
   const p = generateForLevel(level);

@@ -237,9 +237,9 @@ export interface Report {
 
 function band(score: number): number {
   if (score < 50) return 1;
-  if (score < 75) return 2;
-  if (score < 100) return 3;
-  if (score < 120) return 4;
+  if (score < 85) return 2;
+  if (score < 120) return 3;
+  if (score < 145) return 4;
   return 5;
 }
 
