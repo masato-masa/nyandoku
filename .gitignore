@@ -3,3 +3,5 @@ dist/
 refs/
 *.local
 .DS_Store
+
+.playwright-cli/
