@@ -40,6 +40,9 @@ body {
      動かない（iOS のバウンド、Android の引っぱって更新を止める）。
      中身があふれる一覧などは、その要素の中だけでスクロールする。 */
   overscroll-behavior: none;
+  /* ダブルタップ拡大と長押しメニューを止める（連打・長押しの操作が途切れないように） */
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
 }
 
 [hidden] {
