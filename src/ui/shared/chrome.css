@@ -613,6 +613,26 @@ body {
   }
 }
 
+/* 高さ 600px 以下（iPhone SE 1 世代など 320×568）: ツール行とヘッダー 2 段目を詰めて、盤面に縦を回す。
+   押し先は 44px 以上を守る。 */
+@media (max-height: 600px) {
+  :root {
+    --status-h: 24px;
+  }
+  .header {
+    gap: 2px;
+  }
+  .tool {
+    width: 46px;
+    height: 46px;
+    padding: 8px;
+  }
+  .tool svg {
+    width: 26px;
+    height: 26px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition-duration: 1ms !important;
