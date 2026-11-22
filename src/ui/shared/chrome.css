@@ -616,6 +616,80 @@ body {
   }
 }
 
+/* ---- ステージ選択（しずく・かがみ・とりっこで共通。1 ワールドの列数は --level-cols、既定 3）。
+   ホームの進み具合（.home-progress）は動物パズルが別の見た目で使っているので、ここには入れない ---- */
+
+/* ---- ステージ選択 ---- */
+.worlds {
+  width: 100%;
+}
+.world {
+  margin-bottom: 22px;
+}
+.world-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+  border-bottom: 2px solid var(--line);
+  padding-bottom: 6px;
+}
+.world-stars {
+  color: var(--star, #f3c55a);
+  font-size: 0.85rem;
+}
+.level-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--level-cols, 3), 1fr);
+  gap: 8px;
+}
+.level-card {
+  appearance: none;
+  aspect-ratio: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius, 14px);
+  background: var(--surface);
+  color: var(--title);
+  font: inherit;
+  cursor: pointer;
+  box-shadow: var(--shadow-xs);
+  padding: 6px;
+  min-height: 64px;
+  transition: transform 80ms ease-out;
+}
+.level-card:active:not(.locked) {
+  transform: translateY(2px);
+  box-shadow: none;
+}
+.level-card.locked {
+  background: var(--surface-2, #faf0ea);
+  color: var(--muted);
+  cursor: default;
+  box-shadow: none;
+  opacity: 0.7;
+}
+.level-card.perfect {
+  border-color: var(--star, #f3c55a);
+}
+.level-num {
+  font-size: 1.5rem;
+  font-weight: 800;
+  line-height: 1;
+}
+.level-stars {
+  font-size: 0.9rem;
+  letter-spacing: 1px;
+}
+.lock {
+  font-size: 0.9rem;
+}
+
 /* 高さ 600px 以下（iPhone SE 1 世代など 320×568）: ツール行とヘッダー 2 段目を詰めて、盤面に縦を回す。
    押し先は 44px 以上を守る。 */
 @media (max-height: 600px) {
