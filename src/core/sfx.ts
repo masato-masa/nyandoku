@@ -103,7 +103,7 @@ type SampleName = 'cat' | 'cross' | 'conflict' | 'win';
 const sampleUrls = import.meta.glob('../assets/sfx/*.wav', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
 const buffers = new Map<SampleName, AudioBuffer>();
 /** 録音はピーク 0.9 にそろえてあるので、役割に合わせて下げる。 */
-const SAMPLE_GAIN: Record<SampleName, number> = { cat: 0.6, cross: 0.22, conflict: 0.4, win: 0.7 };
+const SAMPLE_GAIN: Record<SampleName, number> = { cat: 0.6, cross: 0.22, conflict: 0.3, win: 0.7 };
 
 function loadSamples(ac: AudioContext): void {
   for (const [path, url] of Object.entries(sampleUrls)) {
