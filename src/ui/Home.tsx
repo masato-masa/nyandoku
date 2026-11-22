@@ -53,7 +53,7 @@ export function Home({
             )}
           </button>
           <button className="home-btn" type="button" onClick={onOpenLevels}>
-            ステージをえらぶ
+            ステージを えらぶ
           </button>
         </div>
       </div>
