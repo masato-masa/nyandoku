@@ -1100,7 +1100,49 @@ function search(
  *
  * @param reused 段階 4 から再入したときに立てる。二重に逃げないための歯止め。
  */
+/**
+ * 手筋の面（2026-11-22、ND-14）。最初の 3 面で、技法を 1 つずつ教える。条件は解いた結果（解析）で決める:
+ *   1 面 数字だけ（被覆も集合も背理法も使わない）
+ *   2 面 被覆（「このマスを見られるのはここだけ」）が要る。集合・背理法は使わない
+ *   3 面 集合の推論が要る。背理法は使わない
+ * どれも論理だけで唯一解（generate の段階で保証済み）。面の番号と盤面の対応は決定的で、4 面以降は従来どおり。
+ */
+const TEACHING: Record<number, (a: Analysis) => boolean> = {
+  1: (a) => a.byCover === 0 && a.bySubset === 0 && a.contradictions.length === 0,
+  2: (a) => a.byCover >= 1 && a.bySubset === 0 && a.contradictions.length === 0,
+  3: (a) => a.bySubset >= 1 && a.bySubset <= 3 && a.byCover <= 2 && a.contradictions.length === 0,
+};
+
+function generateTeaching(level: number, ok: (a: Analysis) => boolean): Puzzle | null {
+  const rng = mulberry32(level * 104729 + 77);
+  for (let i = 0; i < 4000; i++) {
+    const knobs = sampleKnobs(level, rng, 1);
+    const { raw } = tryGenerate(knobs, rng, 40);
+    if (!raw) continue;
+    const analysis = analyse(raw.n, raw.wall, raw.numbers, raw.candidate);
+    if (!analysis.solved || !ok(analysis)) continue;
+    return {
+      n: raw.n,
+      level,
+      wall: raw.wall,
+      numbers: raw.numbers,
+      candidate: raw.candidate,
+      solution: raw.solution,
+      knobs,
+      difficulty: difficultyOf(analysis),
+      analysis,
+      stage: 1,
+    };
+  }
+  return null;
+}
+
 export function generateForLevel(level: number, reused = false): Puzzle {
+  const teach = TEACHING[level];
+  if (teach && !reused) {
+    const p = generateTeaching(level, teach);
+    if (p) return p;
+  }
   const rng = mulberry32(level * 7919 + 104729);
   const target = targetDifficulty(level, rng);
 
