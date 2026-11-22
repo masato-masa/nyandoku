@@ -140,7 +140,7 @@ interface DevSheetProps {
 
 /**
  * 開発者用。本番の操作導線には出さず、ホーム右下の小さなピルからだけ開く。
- * 「すきなレベルへ飛ぶ」は到達していないレベルにも飛べる（動作確認用なので
+ * 「すきなステージへ飛ぶ」は到達していないレベルにも飛べる（動作確認用なので
  * わざと制限しない）。
  */
 export function DevSheet({ maxLevel, onJump, onOpenReport, onClearProgress, onClose }: DevSheetProps) {
@@ -156,7 +156,7 @@ export function DevSheet({ maxLevel, onJump, onOpenReport, onClearProgress, onCl
         <p className="dev-note">本番では使わない、動作確認用のボタンです。</p>
 
         <div className="sheet-row static">
-          <span>すきなレベルへ</span>
+          <span>すきなステージへ</span>
           <input
             className="dev-input"
             type="number"
@@ -164,7 +164,7 @@ export function DevSheet({ maxLevel, onJump, onOpenReport, onClearProgress, onCl
             inputMode="numeric"
             value={value}
             onChange={(e) => setValue(e.target.value)}
-            aria-label="レベル番号"
+            aria-label="ステージ番号"
           />
         </div>
 
@@ -174,7 +174,7 @@ export function DevSheet({ maxLevel, onJump, onOpenReport, onClearProgress, onCl
           disabled={!ok}
           onClick={() => ok && onJump(level)}
         >
-          そのレベルで始める
+          そのステージで はじめる
         </button>
 
         <button className="sheet-btn" type="button" onClick={onOpenReport}>
@@ -216,7 +216,7 @@ export function LevelSheet({ current, max, onPick, onClose }: LevelSheetProps) {
   return (
     <Overlay key="levels" onClose={onClose}>
       <Sheet className="sheet-levels">
-        <h2 className="sheet-title">レベル</h2>
+        <h2 className="sheet-title">ステージ</h2>
 
         <div className="sheet-list" ref={listRef}>
           {levels.map((lv) => (

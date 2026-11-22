@@ -46,7 +46,7 @@ export function Home({
             {started ? (
               <>
                 つづきから
-                <span className="home-btn-sub">レベル {maxLevel}</span>
+                <span className="home-btn-sub">ステージ {maxLevel}</span>
               </>
             ) : (
               'はじめる'

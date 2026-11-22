@@ -133,7 +133,7 @@ export default function App() {
       setState(game);
       setLoading(false);
       // 次のレベルを裏で先に作っておく。1 面解くのに数分かかるので、
-      // その間に作り終わっていれば「次のレベルへ」の待ちは消える。
+      // その間に作り終わっていれば「つぎへ」の待ちは消える。
       prefetchLevel(level + 1);
     };
 
@@ -163,7 +163,7 @@ export default function App() {
     }
   }, [state?.status, state?.level]);
 
-  // クリアした瞬間に記録する。ここを「次のレベルへ」を押したときにすると、
+  // クリアした瞬間に記録する。ここを「つぎへ」を押したときにすると、
   // クリア画面のままブラウザを閉じたぶんが丸ごと消える。
   useEffect(() => {
     if (!state || state.status !== 'won') return;
@@ -388,7 +388,7 @@ export default function App() {
             </button>
           </div>
 
-          <h1 className="title">レベル {state.level}</h1>
+          <h1 className="title">ステージ {state.level}</h1>
 
           {/* 並びは ? が左、設定が右。4 つのゲームで同じにしてある。 */}
           <div className="header-actions">
@@ -499,7 +499,7 @@ export default function App() {
 
               <h2>クリア！</h2>
               <p>
-                レベル {state.level} 突破
+                ステージ {state.level} 突破
                 {state.hintsUsed > 0 ? ` · ヒント ${state.hintsUsed} 回` : ''}
               </p>
               {/* 進み具合の節目。10 面ごとに段が上がる（ND-5） */}
@@ -529,7 +529,7 @@ export default function App() {
                 type="button"
                 onClick={() => goToLevel(state.level + 1)}
               >
-                次のレベルへ
+                つぎへ
               </button>
               <button className="sheet-link" type="button" onClick={goHome}>
                 ホームへ
