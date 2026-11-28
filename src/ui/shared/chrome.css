@@ -420,7 +420,7 @@ body {
   border-radius: var(--sheet-radius);
   padding: 26px 26px 22px;
   box-shadow: var(--shadow-lg);
-  width: min(92vw, 420px);
+  width: min(100%, 420px);
   max-height: min(80dvh, 620px);
   display: flex;
   flex-direction: column;

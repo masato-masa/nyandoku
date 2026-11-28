@@ -175,7 +175,7 @@ export function Board({ state, derived, onTap, onPaint, onPaintEnd }: BoardProps
         gridTemplateRows: `repeat(${n}, 1fr)`,
         // 壁の数字はセルの大きさに追従させる。盤面が 6x6 から 9x9 まで変わるので
         // 固定 px にすると、大きい盤で数字が窮屈になる。
-        fontSize: `calc((min(92vw, 452px) - ${PAD * 2}px - ${GAP * (n - 1)}px) / ${n} * 0.44)`,
+        fontSize: `calc((min(92vw, 452px) - ${PAD * 2}px - ${GAP * (n - 1)}px) / ${n} * 0.5)`,
       }}
       role="grid"
       aria-label={`${n}×${n} の盤面`}
